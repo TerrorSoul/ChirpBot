@@ -16,34 +16,26 @@ export function createQuoteEmbed(quote) {
 export function createHelpEmbed(commands) {
     const helpEmbed = new EmbedBuilder()
         .setColor('#0099ff')
-        .setTitle('Available Commands')
-        .setDescription('Here are the commands you can use:');
+        .setTitle('Available Commands');
 
-    // Get the highest permission level from the available commands
-    // This will be the user's effective permission level
-    const userPermLevel = Math.max(...commands.map(cmd => 
-        ({owner: 4, admin: 3, moderator: 2, user: 1})[cmd.permissionLevel]
-    ));
+    if (commands.length === 0) {
+        helpEmbed.setDescription('No commands available.');
+        return helpEmbed;
+    }
 
-    const permLevels = {
-        owner: 4,
-        admin: 3,
-        moderator: 2,
-        user: 1
-    };
+    // Separate global and guild commands
+    const globalCommands = commands.filter(cmd => cmd.global);
+    const guildCommands = commands.filter(cmd => !cmd.global);
 
-    // Group commands by permission level and category
+    // Group guild commands by permission level and category
     const groupedCommands = {
         owner: {},
-        admin: {},
         moderator: {},
         user: {}
     };
 
-    // Sort commands into their groups, only including accessible ones
-    commands.forEach(cmd => {
-        // Only include commands the user has permission to use
-        if (permLevels[cmd.permissionLevel] <= userPermLevel) {
+    guildCommands.forEach(cmd => {
+        if (cmd.permissionLevel) {
             if (!groupedCommands[cmd.permissionLevel][cmd.category]) {
                 groupedCommands[cmd.permissionLevel][cmd.category] = [];
             }
@@ -51,37 +43,39 @@ export function createHelpEmbed(commands) {
         }
     });
 
-    // Permission level titles with emojis
+    // Add global commands section if there are any
+    if (globalCommands.length > 0) {
+        const globalCommandsList = globalCommands
+            .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
+            .join('\n');
+
+        helpEmbed.addFields({
+            name: '🌐 Global Commands',
+            value: globalCommandsList
+        });
+    }
+
+    // Add guild commands by permission level
     const levelTitles = {
         owner: '👑 Owner Commands',
-        admin: '⚡ Admin Commands',
         moderator: '🛡️ Moderator Commands',
         user: '👤 User Commands'
     };
 
-    // Add fields for each permission level and category
     Object.entries(groupedCommands).forEach(([level, categories]) => {
-        // Only show levels the user has access to
-        if (permLevels[level] <= userPermLevel) {
-            Object.entries(categories).forEach(([category, cmds]) => {
-                if (cmds.length > 0) {
-                    const commandList = cmds
-                        .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
-                        .join('\n');
+        Object.entries(categories).forEach(([category, cmds]) => {
+            if (cmds.length > 0) {
+                const commandsList = cmds
+                    .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
+                    .join('\n');
 
-                    helpEmbed.addFields({
-                        name: `${levelTitles[level]} - ${category.charAt(0).toUpperCase() + category.slice(1)}`,
-                        value: commandList
-                    });
-                }
-            });
-        }
+                helpEmbed.addFields({
+                    name: `${levelTitles[level]} - ${category.charAt(0).toUpperCase() + category.slice(1)}`,
+                    value: commandsList
+                });
+            }
+        });
     });
-
-    // If no commands are available
-    if (!helpEmbed.data.fields?.length) {
-        helpEmbed.setDescription('You currently don\'t have access to any commands.\nAsk a server administrator to set up the bot and assign appropriate roles.');
-    }
 
     return helpEmbed;
 }

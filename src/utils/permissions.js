@@ -90,7 +90,7 @@ export async function checkModeratorRole(interaction) {
     return ['owner', 'moderator'].includes(userPermLevel);
 }
 
-export async function getUserAccessibleCommands(member, commands) {
+export async function getUserAccessibleCommands(member, guildCommands, globalCommands) {
     const userPermLevel = await getUserPermissionLevel(member);
     const permLevels = {
         'owner': 3,
@@ -98,16 +98,17 @@ export async function getUserAccessibleCommands(member, commands) {
         'user': 1
     };
 
-    return Array.from(commands.values()).filter(command => {
-        // Global commands are always accessible
-        if (command.global || command.type === ApplicationCommandType.User) return true;
-        
-        // Owner can access all commands
-        if (userPermLevel === 'owner') return true;
-        
-        // Others can access their level and below
+    // Get guild commands the user can access
+    const accessibleGuildCommands = Array.from(guildCommands.values()).filter(command => {
+        if (!command.permissionLevel) return true;
         return permLevels[userPermLevel] >= permLevels[command.permissionLevel];
     });
+
+    // Get all global commands
+    const globalCommandList = Array.from(globalCommands.values());
+
+    // Combine guild and global commands
+    return [...accessibleGuildCommands, ...globalCommandList];
 }
 
 export async function canAccessCategory(member, category, permissionLevel) {

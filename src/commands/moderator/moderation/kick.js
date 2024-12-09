@@ -4,7 +4,7 @@ import { logAction } from '../../../utils/logging.js';
 export const command = {
     name: 'kick',
     description: 'Kick a user',
-    permissionLevel: 'admin',
+    permissionLevel: 'moderator',
     options: [
         {
             name: 'user',

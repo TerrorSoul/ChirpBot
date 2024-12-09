@@ -36,7 +36,14 @@ export const command = {
        {
            name: 'log_channel',
            type: ApplicationCommandOptionType.Channel,
-           description: 'Channel for bot logs',
+           description: 'Channel for logs',
+           required: false,
+           channel_types: [ChannelType.GuildText]
+       },
+       {
+           name: 'reports_channel',
+           type: ApplicationCommandOptionType.Channel,
+           description: 'Channel for user reports',
            required: false,
            channel_types: [ChannelType.GuildText]
        },
@@ -52,6 +59,28 @@ export const command = {
            type: ApplicationCommandOptionType.Boolean,
            description: 'Enable welcome messages',
            required: false
+       },
+       {
+           name: 'spam_protection',
+           type: ApplicationCommandOptionType.Boolean,
+           description: 'Enable spam protection',
+           required: false
+       },
+       {
+           name: 'spam_threshold',
+           type: ApplicationCommandOptionType.Integer,
+           description: 'Number of messages before spam warning (default: 5)',
+           required: false,
+           min_value: 3,
+           max_value: 10
+       },
+       {
+           name: 'spam_interval',
+           type: ApplicationCommandOptionType.Integer,
+           description: 'Time window for spam detection in seconds (default: 5)',
+           required: false,
+           min_value: 3,
+           max_value: 30
        }
    ],
    execute: async (interaction) => {
@@ -93,6 +122,177 @@ export const command = {
    }
 };
 
+async function quickSetup(interaction, commandStructure) {
+   const cooldown = interaction.options.getInteger('cooldown') ?? 5;
+   const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
+   const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
+   const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
+   
+   const modRole = await interaction.guild.roles.create({
+       name: 'Bot Moderator',
+       color: 0x0000FF,
+       reason: 'Bot setup - moderator role'
+   });
+
+   const logChannel = await interaction.guild.channels.create({
+       name: 'logs',
+       type: ChannelType.GuildText,
+       permissionOverwrites: [
+           {
+               id: interaction.guild.id,
+               deny: ['ViewChannel']
+           },
+           {
+               id: modRole.id,
+               allow: ['ViewChannel']
+           }
+       ]
+   });
+
+   const reportsChannel = await interaction.guild.channels.create({
+       name: 'reports',
+       type: ChannelType.GuildText,
+       permissionOverwrites: [
+           {
+               id: interaction.guild.id,
+               deny: ['ViewChannel']
+           },
+           {
+               id: modRole.id,
+               allow: ['ViewChannel', 'SendMessages']
+           }
+       ]
+   });
+
+   const welcomeChannel = await interaction.guild.channels.create({
+       name: 'welcome',
+       type: ChannelType.GuildText,
+       permissionOverwrites: [
+           {
+               id: interaction.guild.id,
+               allow: ['ViewChannel'],
+               deny: ['SendMessages']
+           }
+       ]
+   });
+
+   return {
+       guild_id: interaction.guildId,
+       setup_completed: true,
+       mod_role_id: modRole.id,
+       log_channel_id: logChannel.id,
+       reports_channel_id: reportsChannel.id,
+       welcome_channel_id: welcomeChannel.id,
+       warning_threshold: 3,
+       warning_expire_days: 30,
+       cooldown_seconds: cooldown,
+       welcome_enabled: true,
+       welcome_messages: JSON.stringify(WELCOME_MESSAGES),
+       disabled_commands: '',
+       spam_protection: spamProtection,
+       spam_threshold: spamThreshold,
+       spam_interval: spamInterval * 1000,
+       spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.'
+   };
+}
+
+async function manualSetup(interaction, commandStructure) {
+   const modRole = interaction.options.getRole('mod_role');
+   const logChannel = interaction.options.getChannel('log_channel');
+   const reportsChannel = interaction.options.getChannel('reports_channel');
+   const welcomeChannel = interaction.options.getChannel('welcome_channel');
+   const welcomeEnabled = interaction.options.getBoolean('welcome_enabled') ?? true;
+   const cooldown = interaction.options.getInteger('cooldown') ?? 5;
+   const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
+   const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
+   const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
+
+   if (!modRole || !logChannel || !reportsChannel) {
+       throw new Error('Moderator role, log channel, and reports channel are required for manual setup');
+   }
+
+   return {
+       guild_id: interaction.guildId,
+       setup_completed: true,
+       mod_role_id: modRole.id,
+       log_channel_id: logChannel.id,
+       reports_channel_id: reportsChannel.id,
+       welcome_channel_id: welcomeChannel?.id || null,
+       warning_threshold: 3,
+       warning_expire_days: 30,
+       cooldown_seconds: cooldown,
+       welcome_enabled: welcomeEnabled,
+       welcome_messages: JSON.stringify(WELCOME_MESSAGES),
+       disabled_commands: '',
+       spam_protection: spamProtection,
+       spam_threshold: spamThreshold,
+       spam_interval: spamInterval * 1000,
+       spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.'
+   };
+}
+
+function createSetupSummaryEmbed(interaction, settings, commandStructure) {
+   const embed = new EmbedBuilder()
+       .setTitle('🔧 Bot Setup Complete')
+       .setColor('#00FF00')
+       .addFields(
+           { 
+               name: 'Roles',
+               value: `Moderator: <@&${settings.mod_role_id}>`,
+               inline: true
+           },
+           {
+               name: 'Channels',
+               value: `Logs: <#${settings.log_channel_id}>
+Reports: <#${settings.reports_channel_id}>${
+                   settings.welcome_channel_id ? `\nWelcome: <#${settings.welcome_channel_id}>` : ''
+               }`.trim(),
+               inline: true
+           },
+           {
+               name: 'Features',
+               value: `Welcome Messages: ${settings.welcome_enabled ? 'Enabled' : 'Disabled'}
+Spam Protection: ${settings.spam_protection ? 'Enabled' : 'Disabled'}
+Command Cooldown: ${settings.cooldown_seconds}s`,
+               inline: true
+           }
+       );
+
+   if (settings.spam_protection) {
+       embed.addFields({
+           name: 'Spam Protection Settings',
+           value: `Threshold: ${settings.spam_threshold} messages
+Interval: ${settings.spam_interval / 1000}s
+Warning Threshold: ${settings.warning_threshold} warnings`,
+           inline: false
+       });
+   }
+
+   const permLevelTitles = {
+       owner: '👑 Owner Commands',
+       moderator: '🛡️ Moderator Commands',
+       user: '👤 User Commands'
+   };
+
+   for (const [permLevel, categories] of Object.entries(commandStructure)) {
+       const commandList = Object.entries(categories)
+           .map(([category, commands]) => 
+               `**${category}**\n${commands.map(cmd => `• ${cmd}`).join('\n')}`
+           )
+           .join('\n\n');
+
+       if (commandList) {
+           embed.addFields({
+               name: permLevelTitles[permLevel],
+               value: commandList
+           });
+       }
+   }
+
+   embed.setFooter({ text: 'Use /help to see your available commands' });
+   return embed;
+}
+
 async function getCommandStructure() {
    const structure = {
        owner: {},
@@ -124,130 +324,4 @@ async function getCommandStructure() {
    }
 
    return structure;
-}
-
-async function quickSetup(interaction, commandStructure) {
-   const cooldown = interaction.options.getInteger('cooldown') ?? 5;
-   
-   const modRole = await interaction.guild.roles.create({
-       name: 'Bot Moderator',
-       color: 0x0000FF,  // Blue
-       reason: 'Bot setup - moderator role'
-   });
-
-   const logChannel = await interaction.guild.channels.create({
-       name: 'bot-logs',
-       type: ChannelType.GuildText,
-       permissionOverwrites: [
-           {
-               id: interaction.guild.id,
-               deny: ['ViewChannel']
-           },
-           {
-               id: modRole.id,
-               allow: ['ViewChannel']
-           }
-       ]
-   });
-
-   const welcomeChannel = await interaction.guild.channels.create({
-       name: 'welcome',
-       type: ChannelType.GuildText,
-       permissionOverwrites: [
-           {
-               id: interaction.guild.id,
-               allow: ['ViewChannel'],
-               deny: ['SendMessages']
-           }
-       ]
-   });
-
-   return {
-       guild_id: interaction.guildId,
-       setup_completed: true,
-       mod_role_id: modRole.id,
-       log_channel_id: logChannel.id,
-       welcome_channel_id: welcomeChannel.id,
-       warning_threshold: 3,
-       warning_expire_days: 30,
-       cooldown_seconds: cooldown,
-       welcome_enabled: true,
-       welcome_messages: JSON.stringify(WELCOME_MESSAGES),
-       disabled_commands: ''
-   };
-}
-
-async function manualSetup(interaction, commandStructure) {
-   const modRole = interaction.options.getRole('mod_role');
-   const logChannel = interaction.options.getChannel('log_channel');
-   const welcomeChannel = interaction.options.getChannel('welcome_channel');
-   const welcomeEnabled = interaction.options.getBoolean('welcome_enabled') ?? true;
-   const cooldown = interaction.options.getInteger('cooldown') ?? 5;
-
-   if (!modRole || !logChannel) {
-       throw new Error('Moderator role and log channel are required for manual setup');
-   }
-
-   return {
-       guild_id: interaction.guildId,
-       setup_completed: true,
-       mod_role_id: modRole.id,
-       log_channel_id: logChannel.id,
-       welcome_channel_id: welcomeChannel?.id || null,
-       warning_threshold: 3,
-       warning_expire_days: 30,
-       cooldown_seconds: cooldown,
-       welcome_enabled: welcomeEnabled,
-       welcome_messages: JSON.stringify(WELCOME_MESSAGES),
-       disabled_commands: ''
-   };
-}
-
-function createSetupSummaryEmbed(interaction, settings, commandStructure) {
-   const embed = new EmbedBuilder()
-       .setTitle('🔧 Bot Setup Complete')
-       .setColor('#00FF00')
-       .addFields(
-           { 
-               name: 'Roles',
-               value: `Moderator: <@&${settings.mod_role_id}>`,
-               inline: true
-           },
-           {
-               name: 'Channels',
-               value: `Logs: <#${settings.log_channel_id}>\n${
-                   settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : ''
-               }`.trim(),
-               inline: true
-           },
-           {
-               name: 'Settings',
-               value: `Welcome Messages: ${settings.welcome_enabled ? 'Enabled' : 'Disabled'}\nCommand Cooldown: ${settings.cooldown_seconds}s`,
-               inline: true
-           }
-       );
-
-   const permLevelTitles = {
-       owner: '👑 Owner Commands',
-       moderator: '🛡️ Moderator Commands',
-       user: '👤 User Commands'
-   };
-
-   for (const [permLevel, categories] of Object.entries(commandStructure)) {
-       const commandList = Object.entries(categories)
-           .map(([category, commands]) => 
-               `**${category}**\n${commands.map(cmd => `• ${cmd}`).join('\n')}`
-           )
-           .join('\n\n');
-
-       if (commandList) {
-           embed.addFields({
-               name: permLevelTitles[permLevel],
-               value: commandList
-           });
-       }
-   }
-
-   embed.setFooter({ text: 'Use /help to see your available commands' });
-   return embed;
 }

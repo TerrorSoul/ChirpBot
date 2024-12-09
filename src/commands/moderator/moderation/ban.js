@@ -4,7 +4,7 @@ import { logAction } from '../../../utils/logging.js';
 export const command = {
     name: 'ban',
     description: 'Ban a user from the server',
-    permissionLevel: 'admin',
+    permissionLevel: 'moderator',
     options: [
         {
             name: 'user',
