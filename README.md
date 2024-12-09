@@ -1,4 +1,4 @@
-![ChirpBot Logo](https://chirpbot.ludixi.com/ChirpBot.png)
+<img src="https://chirpbot.ludixi.com/ChirpBot.png" alt="ChirpBot Logo" width="200"/>
 
 Welcome to **ChirpBot**! Need help with **Trailmakers** building, challenges, modding, or server moderation? **ChirpBot** has you covered!
 
