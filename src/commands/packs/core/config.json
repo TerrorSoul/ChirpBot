@@ -1,0 +1,6 @@
+{
+    "name": "Core",
+    "description": "Core bot functionality",
+    "category": "Essential",
+    "isCore": true
+}

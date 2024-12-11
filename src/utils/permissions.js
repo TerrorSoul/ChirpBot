@@ -3,37 +3,30 @@ import { ApplicationCommandType } from 'discord.js';
 import db from '../database/index.js';
 
 async function getUserPermissionLevel(member, settings = null) {
-    // Server owner gets highest permission level
     if (member.guild.ownerId === member.id) return 'owner';
 
-    // Get server settings if not provided
     if (!settings) {
         settings = await db.getServerSettings(member.guild.id);
     }
 
-    // If server isn't set up, only owner can use commands
     if (!settings?.setup_completed) {
         return member.guild.ownerId === member.id ? 'owner' : 'user';
     }
 
-    // Check for moderator role
     if (settings.mod_role_id && member.roles.cache.has(settings.mod_role_id)) {
         return 'moderator';
     }
 
-    // Default permission level
     return 'user';
 }
 
 export async function hasPermission(interaction, command) {
-    // For global commands or context menu commands
     if (command.global || command.type === ApplicationCommandType.User) {
         return true;
     }
 
     const settings = await db.getServerSettings(interaction.guildId);
     
-    // Special handling for owner-level commands
     if (command.permissionLevel === 'owner') {
         if (interaction.guild.ownerId !== interaction.user.id) {
             await interaction.reply({
@@ -45,7 +38,6 @@ export async function hasPermission(interaction, command) {
         return true;
     }
 
-    // Check if server is set up (except for setup command)
     if (!settings?.setup_completed && command.name !== 'setup') {
         await interaction.reply({
             content: 'Server needs to be set up first. Ask the server owner to run /setup',
@@ -54,7 +46,14 @@ export async function hasPermission(interaction, command) {
         return false;
     }
 
-    // Check if command is disabled
+    if (command.pack && !await db.isPackEnabled(interaction.guildId, command.pack)) {
+        await interaction.reply({
+            content: `This command is part of the ${command.pack} pack which is not enabled on this server.`,
+            ephemeral: true
+        });
+        return false;
+    }
+
     if (settings?.disabled_commands?.includes(command.name)) {
         await interaction.reply({
             content: 'This command is disabled on this server.',
@@ -66,14 +65,12 @@ export async function hasPermission(interaction, command) {
     const userPermLevel = await getUserPermissionLevel(interaction.member, settings);
     const commandPermLevel = command.permissionLevel;
 
-    // Permission hierarchy
     const permLevels = {
         'owner': 3,
         'moderator': 2,
         'user': 1
     };
 
-    // Check if user has sufficient permissions
     if (permLevels[userPermLevel] >= permLevels[commandPermLevel]) {
         return true;
     }
@@ -98,16 +95,18 @@ export async function getUserAccessibleCommands(member, guildCommands, globalCom
         'user': 1
     };
 
-    // Get guild commands the user can access
+    const enabledPacks = await db.getEnabledPacks(member.guild.id);
+    const enabledPackNames = enabledPacks.map(p => p.name);
+
     const accessibleGuildCommands = Array.from(guildCommands.values()).filter(command => {
         if (!command.permissionLevel) return true;
-        return permLevels[userPermLevel] >= permLevels[command.permissionLevel];
+        const hasPermissionLevel = permLevels[userPermLevel] >= permLevels[command.permissionLevel];
+        const isPackEnabled = !command.pack || command.pack.isCore || enabledPackNames.includes(command.pack);
+        return hasPermissionLevel && isPackEnabled;
     });
 
-    // Get all global commands
     const globalCommandList = Array.from(globalCommands.values());
 
-    // Combine guild and global commands
     return [...accessibleGuildCommands, ...globalCommandList];
 }
 

@@ -1,3 +1,4 @@
+// eventHandler.js
 import { loadCommands, handleCommand } from './commandHandler.js';
 import { initMistral } from '../services/mistralService.js';
 import { EmbedBuilder } from 'discord.js';
@@ -23,33 +24,49 @@ export async function initHandlers(client) {
        if (interaction.isCommand()) {
            await handleCommand(interaction);
        } else if (interaction.isAutocomplete()) {
-           if (interaction.commandName === 'setup' && 
-               interaction.options.getFocused(true).name === 'enabled_commands') {
-               const fullInput = interaction.options.getFocused();
-               const commands = Array.from(client.commands.values())
-                   .filter(cmd => cmd.permissionLevel !== 'owner')
-                   .map(cmd => cmd.name);
-               
-               const parts = fullInput.split(',');
-               const currentValue = parts[parts.length - 1].trim().toLowerCase();
-               const selectedCommands = parts.slice(0, -1).map(p => p.trim());
-               
-               let choices = currentValue === '' ?
-                   ['all', ...commands.filter(cmd => !selectedCommands.includes(cmd))] :
-                   ['all', ...commands.filter(cmd => 
-                       cmd.toLowerCase().includes(currentValue) && 
-                       !selectedCommands.includes(cmd)
-                   )];
+           if (interaction.commandName === 'setup') {
+               if (interaction.options.getFocused(true).name === 'command_packs') {
+                   try {
+                       const packs = await db.getAllPacks();
+                       const nonCorePacks = packs.filter(pack => !pack.is_core);
+                       
+                       const choices = nonCorePacks.map(pack => ({
+                           name: `${pack.category} - ${pack.name}: ${pack.description}`,
+                           value: pack.name
+                       }));
+                       
+                       await interaction.respond(choices);
+                   } catch (error) {
+                       console.error('Error getting pack choices:', error);
+                       await interaction.respond([]);
+                   }
+               } else if (interaction.options.getFocused(true).name === 'enabled_commands') {
+                   const fullInput = interaction.options.getFocused();
+                   const commands = Array.from(client.commands.values())
+                       .filter(cmd => cmd.permissionLevel !== 'owner')
+                       .map(cmd => cmd.name);
+                   
+                   const parts = fullInput.split(',');
+                   const currentValue = parts[parts.length - 1].trim().toLowerCase();
+                   const selectedCommands = parts.slice(0, -1).map(p => p.trim());
+                   
+                   let choices = currentValue === '' ?
+                       ['all', ...commands.filter(cmd => !selectedCommands.includes(cmd))] :
+                       ['all', ...commands.filter(cmd => 
+                           cmd.toLowerCase().includes(currentValue) && 
+                           !selectedCommands.includes(cmd)
+                       )];
 
-               const suggestions = choices.map(choice => ({
-                   name: choice === 'all' ? 'all' : 
-                       (selectedCommands.length ? 
-                           `${selectedCommands.join(',')},${choice}` : choice),
-                   value: choice === 'all' ? 'all' : 
-                       [...selectedCommands, choice].join(',')
-               }));
+                   const suggestions = choices.map(choice => ({
+                       name: choice === 'all' ? 'all' : 
+                           (selectedCommands.length ? 
+                               `${selectedCommands.join(',')},${choice}` : choice),
+                       value: choice === 'all' ? 'all' : 
+                           [...selectedCommands, choice].join(',')
+                   }));
 
-               await interaction.respond(suggestions.slice(0, 25));
+                   await interaction.respond(suggestions.slice(0, 25));
+               }
            }
        }
    });
@@ -214,89 +231,97 @@ export async function initHandlers(client) {
        }
    });
 
-   // Add this to eventHandler.js inside initHandlers
-    client.on('messageCreate', async (message) => {
-        // Ignore bot messages and DMs
-        if (message.author.bot || !message.guild) return;
-
-        const settings = await db.getServerSettings(message.guild.id);
-        if (!settings?.spam_protection) return;
-
-        // Check if user has moderator role or is owner (exempt from spam check)
-        if (message.guild.ownerId === message.author.id || 
-            (settings.mod_role_id && message.member.roles.cache.has(settings.mod_role_id))) {
-            return;
-        }
-
-        const spamThreshold = settings.spam_threshold || 5;
-        const spamInterval = settings.spam_interval || 5000; // 5 seconds
-
-        const warnings = await db.getSpamWarnings(message.guild.id, message.author.id);
-        const recentMessages = await message.channel.messages.fetch({ 
-            limit: spamThreshold,
-            before: message.id 
-        });
-
-        const userMessages = recentMessages.filter(msg => 
-            msg.author.id === message.author.id && 
-            message.createdTimestamp - msg.createdTimestamp <= spamInterval
-        );
-
-        if (userMessages.size >= spamThreshold - 1) {
-            // User is spamming
-            const warningCount = warnings ? warnings.warning_count + 1 : 1;
-            await db.addSpamWarning(message.guild.id, message.author.id);
-
-            const warningsLeft = settings.warning_threshold - warningCount;
-            const warningMessage = settings.spam_warning_message
-                .replace('{warnings}', warningsLeft.toString())
-                .replace('{user}', message.author.toString());
-
-            await message.reply(warningMessage);
-
-            // Log the spam warning
-            await db.logAction(
-                message.guild.id,
-                'SPAM_WARNING',
-                message.author.id,
-                `Spam detected in #${message.channel.name}. Warning ${warningCount}/${settings.warning_threshold}`
-            );
-
-            // If user has exceeded warning threshold, ban them
-            if (warningCount >= settings.warning_threshold) {
-                try {
-                    await message.member.ban({
-                        reason: `Exceeded spam warning threshold (${settings.warning_threshold})`
-                    });
-
-                    await db.logAction(
-                        message.guild.id,
-                        'AUTO_BAN',
-                        message.author.id,
-                        'Banned for excessive spam'
-                    );
-
-                    const logChannel = message.guild.channels.cache.get(settings.log_channel_id);
-                    if (logChannel) {
-                        const embed = new EmbedBuilder()
-                            .setColor('#FF0000')
-                            .setTitle('User Auto-Banned')
-                            .setDescription(`${message.author.tag} was automatically banned for excessive spam`)
-                            .addFields(
-                                { name: 'User ID', value: message.author.id, inline: true },
-                                { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
-                                { name: 'Warning Count', value: warningCount.toString(), inline: true }
-                            )
-                            .setTimestamp();
-
-                        await logChannel.send({ embeds: [embed] });
-                    }
-                } catch (error) {
-                    console.error('Error auto-banning user:', error);
-                }
-            }
+   client.on('reloadCommands', async () => {
+        try {
+            await loadCommands(client);
+            console.log('Commands reloaded successfully');
+        } catch (error) {
+            console.error('Error reloading commands:', error);
         }
     });
+
+   client.on('messageCreate', async (message) => {
+       // Ignore bot messages and DMs
+       if (message.author.bot || !message.guild) return;
+
+       const settings = await db.getServerSettings(message.guild.id);
+       if (!settings?.spam_protection) return;
+
+       // Check if user has moderator role or is owner (exempt from spam check)
+       if (message.guild.ownerId === message.author.id || 
+           (settings.mod_role_id && message.member.roles.cache.has(settings.mod_role_id))) {
+           return;
+       }
+
+       const spamThreshold = settings.spam_threshold || 5;
+       const spamInterval = settings.spam_interval || 5000; // 5 seconds
+
+       const warnings = await db.getSpamWarnings(message.guild.id, message.author.id);
+       const recentMessages = await message.channel.messages.fetch({ 
+           limit: spamThreshold,
+           before: message.id 
+       });
+
+       const userMessages = recentMessages.filter(msg => 
+           msg.author.id === message.author.id && 
+           message.createdTimestamp - msg.createdTimestamp <= spamInterval
+       );
+
+       if (userMessages.size >= spamThreshold - 1) {
+           // User is spamming
+           const warningCount = warnings ? warnings.warning_count + 1 : 1;
+           await db.addSpamWarning(message.guild.id, message.author.id);
+
+           const warningsLeft = settings.warning_threshold - warningCount;
+           const warningMessage = settings.spam_warning_message
+               .replace('{warnings}', warningsLeft.toString())
+               .replace('{user}', message.author.toString());
+
+           await message.reply(warningMessage);
+
+           // Log the spam warning
+           await db.logAction(
+               message.guild.id,
+               'SPAM_WARNING',
+               message.author.id,
+               `Spam detected in #${message.channel.name}. Warning ${warningCount}/${settings.warning_threshold}`
+           );
+
+           // If user has exceeded warning threshold, ban them
+           if (warningCount >= settings.warning_threshold) {
+               try {
+                   await message.member.ban({
+                       reason: `Exceeded spam warning threshold (${settings.warning_threshold})`
+                   });
+
+                   await db.logAction(
+                       message.guild.id,
+                       'AUTO_BAN',
+                       message.author.id,
+                       'Banned for excessive spam'
+                   );
+
+                   const logChannel = message.guild.channels.cache.get(settings.log_channel_id);
+                   if (logChannel) {
+                       const embed = new EmbedBuilder()
+                           .setColor('#FF0000')
+                           .setTitle('User Auto-Banned')
+                           .setDescription(`${message.author.tag} was automatically banned for excessive spam`)
+                           .addFields(
+                               { name: 'User ID', value: message.author.id, inline: true },
+                               { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
+                               { name: 'Warning Count', value: warningCount.toString(), inline: true }
+                           )
+                           .setTimestamp();
+
+                       await logChannel.send({ embeds: [embed] });
+                   }
+               } catch (error) {
+                   console.error('Error auto-banning user:', error);
+               }
+           }
+       }
+   });
 
    console.log('Event handlers initialized');
 }

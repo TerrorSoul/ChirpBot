@@ -23,58 +23,78 @@ export function createHelpEmbed(commands) {
         return helpEmbed;
     }
 
-    // Separate global and guild commands
-    const globalCommands = commands.filter(cmd => cmd.global);
-    const guildCommands = commands.filter(cmd => !cmd.global);
-
-    // Group guild commands by permission level and category
-    const groupedCommands = {
-        owner: {},
-        moderator: {},
-        user: {}
-    };
-
-    guildCommands.forEach(cmd => {
-        if (cmd.permissionLevel) {
-            if (!groupedCommands[cmd.permissionLevel][cmd.category]) {
-                groupedCommands[cmd.permissionLevel][cmd.category] = [];
-            }
-            groupedCommands[cmd.permissionLevel][cmd.category].push(cmd);
+    // First group by pack
+    const packGroups = commands.reduce((acc, cmd) => {
+        const packName = cmd.pack || 'Core';
+        if (!acc[packName]) {
+            acc[packName] = {
+                global: [],
+                owner: {},
+                moderator: {},
+                user: {}
+            };
         }
-    });
 
-    // Add global commands section if there are any
-    if (globalCommands.length > 0) {
-        const globalCommandsList = globalCommands
-            .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
-            .join('\n');
+        if (cmd.global) {
+            acc[packName].global.push(cmd);
+        } else if (cmd.permissionLevel) {
+            if (!acc[packName][cmd.permissionLevel][cmd.category]) {
+                acc[packName][cmd.permissionLevel][cmd.category] = [];
+            }
+            acc[packName][cmd.permissionLevel][cmd.category].push(cmd);
+        }
 
-        helpEmbed.addFields({
-            name: '🌐 Global Commands',
-            value: globalCommandsList
-        });
-    }
+        return acc;
+    }, {});
 
-    // Add guild commands by permission level
-    const levelTitles = {
-        owner: '👑 Owner Commands',
-        moderator: '🛡️ Moderator Commands',
-        user: '👤 User Commands'
-    };
+    // Process each pack
+    Object.entries(packGroups).forEach(([packName, packData]) => {
+        const packFields = [];
 
-    Object.entries(groupedCommands).forEach(([level, categories]) => {
-        Object.entries(categories).forEach(([category, cmds]) => {
-            if (cmds.length > 0) {
-                const commandsList = cmds
-                    .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
-                    .join('\n');
+        // Add global commands section if there are any
+        if (packData.global.length > 0) {
+            const globalCommandsList = packData.global
+                .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
+                .join('\n');
 
-                helpEmbed.addFields({
-                    name: `${levelTitles[level]} - ${category.charAt(0).toUpperCase() + category.slice(1)}`,
-                    value: commandsList
+            packFields.push({
+                name: '🌐 Global Commands',
+                value: globalCommandsList
+            });
+        }
+
+        // Add guild commands by permission level
+        const levelTitles = {
+            owner: '👑 Owner Commands',
+            moderator: '🛡️ Moderator Commands',
+            user: '👤 User Commands'
+        };
+
+        Object.entries(packData).forEach(([level, categories]) => {
+            if (level !== 'global') {
+                Object.entries(categories).forEach(([category, cmds]) => {
+                    if (cmds.length > 0) {
+                        const commandsList = cmds
+                            .map(cmd => `\`/${cmd.name}\` - ${cmd.description}`)
+                            .join('\n');
+
+                        packFields.push({
+                            name: `${levelTitles[level]} - ${category.charAt(0).toUpperCase() + category.slice(1)}`,
+                            value: commandsList
+                        });
+                    }
                 });
             }
         });
+
+        // Only add pack section if it has commands
+        if (packFields.length > 0) {
+            helpEmbed.addFields({
+                name: `📦 ${packName}`,
+                value: '━━━━━━━━━━━━━━━━━━━━━━'
+            });
+            helpEmbed.addFields(...packFields);
+        }
     });
 
     return helpEmbed;

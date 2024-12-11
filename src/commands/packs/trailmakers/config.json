@@ -1,0 +1,6 @@
+{
+    "name": "trailmakers",
+    "description": "Trailmakers-specific commands",
+    "category": "Games",
+    "isCore": false
+}
