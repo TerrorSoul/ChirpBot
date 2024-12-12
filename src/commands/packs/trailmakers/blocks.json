@@ -1,0 +1,1086 @@
+{
+    "blocks": [
+      {
+        "section": "Mechanical",
+        "overview": "Blocks with mechanical functions, Mechanical Blocks are blocks that move by the Logic Blocks, seat, or another Mechanical Block.",
+        "categories": [
+          {
+            "name": "Hinges",
+            "description": "Blocks with limited rotation, perfect for use in steering or for attaching parts with limited movement.",
+            "blocks": [
+              {
+                "title": "Steering Hinge",
+                "image": "BHinge.png", 
+                "caption": "Allows a limited angle of rotation perfect for wheels.",
+                "weight": "0.5kg",
+                "size": "1x1x1",
+                "hp": "450",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Large Hinge",
+                "image": "BHingeLarge.png",
+                "caption": "Allows a limited angle of rotation perfect for wheels.",
+                "weight": "1.1kg",
+                "size": "1x2x1",
+                "hp": "450",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Trailer Hinge",
+                "image": "BHingeTrailer.png",
+                "caption": "Ball hinge with two attachment points.",
+                "weight": "5kg",
+                "size": "2x2x1",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Racing Hinge",
+                "image": "BHingeRacing.png",
+                "caption": "Allows a limited angle of rotation perfect for wheels of a fast race car.",
+                "weight": "1.2kg",
+                "size": "2x2x1",
+                "hp": "",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Suspension",
+            "description": "Blocks that absorb shock to make your vehicle drive smoother on uneven surfaces.",
+            "blocks": [
+              {
+                "title": "Suspension Spring",
+                "image": "BSuspension.png",
+                "caption": "Absorbs shock to make your vehicle drive smoother on uneven surfaces.",
+                "weight": "0.5kg",
+                "size": "2x1x3",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Straight Suspension",
+                "image": "BSuspensionStraight.png",
+                "caption": "Absorbs shock to make your vehicle drive smoother on uneven surfaces.",
+                "weight": "0.5kg",
+                "size": "1x1x2",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Large Suspension",
+                "image": "BSuspensionLarge.png",
+                "caption": "",
+                "weight": "",
+                "size": "",
+                "hp": "",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Rotators",
+            "description": "Blocks that rotate or spin, often used for precise or quick movement.",
+            "blocks": [
+              {
+                "title": "Rotating Servo",
+                "image": "BServo.png",
+                "caption": "Block that can slowly rotate in each direction.",
+                "weight": "5kg",
+                "size": "2x2x1",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Spinning Servo",
+                "image": "BServoSpinning.png",
+                "caption": "Block that can spin around quickly.",
+                "weight": "9.1kg",
+                "size": "2x2x2",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Aiming Servo",
+                "image": "BServoAiming.png",
+                "caption": "",
+                "weight": "",
+                "size": "2x1x2",
+                "hp": "",
+                "aero": "",
+                "other": "costs 7 complexity",
+                "about": ""
+              },
+              {
+                "title": "Helicopter Engine",
+                "image": "BHeliEngine.png",
+                "caption": "Block that can spin around quickly.",
+                "weight": "5.6kg",
+                "size": "2x2x1",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Stackable Helicopter Engine",
+                "image": "BHeliEngineV2.png",
+                "caption": "A helicopter engine with a static top and bottom.",
+                "weight": "5.6kg",
+                "size": "2x2x1",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Other",
+            "description": "Miscellaneous blocks with special mechanical functions.",
+            "blocks": [
+              {
+                "title": "Piston",
+                "image": "BPiston.png",
+                "caption": "Extendable cylinder that moves back and forth.",
+                "weight": "6.4kg",
+                "size": "1x1x4",
+                "hp": "200",
+                "aero": "",
+                "other": "Useful extension Values: *1/2 block - 0.17 *1 block - 0.33 *3/2 blocks - 0.5 *2 blocks - 0.67 *5/2 blocks - 0.84",
+                "about": ""
+              },
+              {
+                "title": "Detachable Block",
+                "image": "BDetachable.png",
+                "caption": "Detaches the structure it is attached to.",
+                "weight": "1.6kg",
+                "size": "2x1x1",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Gyro",
+                "image": "BGyroActuator.png",
+                "caption": "Adds rotational control and damping to your vehicle.",
+                "weight": "5.6kg",
+                "size": "1x2x2",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Gyro Stabilizer",
+                "image": "BGyroStabilizer.png",
+                "caption": "Stabilizing gyro that slowly rotates your vehicle towards the up direction of the block.",
+                "weight": "5.6kg",
+                "size": "1x2x3",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Power Coupling",
+                "image": "BCoupling.png",
+                "caption": "A flexible electric connection between blocks.",
+                "weight": "0.3kg",
+                "size": "1x4x1",
+                "hp": "200",
+                "aero": "none",
+                "other": "",
+                "about": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "section": "Propulsion",
+        "overview": "Propulsion Blocks are blocks that moves your vehicle.",
+        "categories": [
+          {
+            "name": "Engine Blocks",
+            "description": "Engine Blocks provide power to propel the vehicle forward.",
+            "blocks": [
+              {
+                "title": "Bulldawg Engine",
+                "image": "BBulldawg.png",
+                "caption": "High acceleration. Low top speed.",
+                "weight": "9.4kg",
+                "size": "2x2x1",
+                "hp": "150",
+                "aero": "",
+                "other": "Power: 333",
+                "about": ""
+              },
+              {
+                "title": "RAW Engine",
+                "image": "BRaw.png",
+                "caption": "Low acceleration. High top speed.",
+                "weight": "59.6kg",
+                "size": "2x4x3",
+                "hp": "600",
+                "aero": "",
+                "other": "Power: 1700",
+                "about": ""
+              },
+              {
+                "title": "Dragon Engine",
+                "image": "BDragon.png",
+                "caption": "High acceleration. High top speed.",
+                "weight": "25kg",
+                "size": "2x2x2",
+                "hp": "250",
+                "aero": "",
+                "other": "Power: 3333",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Thruster Blocks",
+            "description": "Thruster Blocks are jet engines that provide thrust for fast movement.",
+            "blocks": [
+              {
+                "title": "Rocket Thruster",
+                "image": "BJetRocket.png",
+                "caption": "A tiny and cheap jet engine with low thrust.",
+                "weight": "9.8kg",
+                "size": "1x2x1",
+                "hp": "200",
+                "aero": "",
+                "other": "Power: 60",
+                "about": ""
+              },
+              {
+                "title": "Thruster",
+                "image": "BJetThruster.png",
+                "caption": "A small and cheap jet engine with low thrust.",
+                "weight": "9.8kg",
+                "size": "1x2x2",
+                "hp": "200",
+                "aero": "",
+                "other": "Power: 80",
+                "about": ""
+              },
+              {
+                "title": "RAW Jet",
+                "image": "BJetRaw.png",
+                "caption": "A very powerful jet engine with a cooldown.",
+                "weight": "53.1kg",
+                "size": "2x5x2",
+                "hp": "200",
+                "aero": "",
+                "other": "Power: 750",
+                "about": ""
+              },
+              {
+                "title": "Dragon Jet",
+                "image": "BJetDragon.png",
+                "caption": "A powerful jet engine that does not overheat.",
+                "weight": "30kg",
+                "size": "2x3x2",
+                "hp": "250",
+                "aero": "",
+                "other": "Power: 300",
+                "about": ""
+              },
+              {
+                "title": "Large Jet",
+                "image": "BJetLarge.png",
+                "caption": "A big and powerful jet engine fit for an airliner.",
+                "weight": "40kg",
+                "size": "4x8x5",
+                "hp": "400",
+                "aero": "",
+                "other": "Power: 800",
+                "about": ""
+              },
+              {
+                "title": "Space Thruster",
+                "image": "BJetSpace.png",
+                "caption": "A powerful thruster fit for a spaceship.",
+                "weight": "15kg",
+                "size": "1x2x2",
+                "hp": "250",
+                "aero": "",
+                "other": "Power: 250",
+                "about": ""
+              },
+              {
+                "title": "Rocket Engine",
+                "image": "BJetNozzle.png",
+                "caption": "A rocket engine with a lot of power.",
+                "weight": "100kg",
+                "size": "4x7x4",
+                "hp": "250",
+                "aero": "",
+                "other": "Power: 1800",
+                "about": ""
+              },
+              {
+                "title": "Gimbal Jet",
+                "image": "BGimbal.png",
+                "caption": "A jet that always fires downwards.",
+                "weight": "9.4kg",
+                "size": "2x2x1",
+                "hp": "200",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Propeller Blocks",
+            "description": "Propeller Blocks provide thrust for movement with a propeller.",
+            "blocks": [
+              {
+                "title": "Propeller",
+                "image": "BPropeller.png",
+                "caption": "Provides propulsive power.",
+                "weight": "12.5kg",
+                "size": "2x2x1",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Large Propeller",
+                "image": "BPropellerL.png",
+                "caption": "Provides a lot of propulsive power.",
+                "weight": "25kg",
+                "size": "2x2x2",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Tail Propeller",
+                "image": "BPropellerTail.png",
+                "caption": "",
+                "weight": "",
+                "size": "",
+                "hp": "",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          },
+          {
+            "name": "Water Blocks",
+            "description": "Water Blocks provide propulsion specifically for water-based vehicles.",
+            "blocks": [
+              {
+                "title": "Outboard Boat Engine",
+                "image": "BWaterOutboard.png",
+                "caption": "Provides propulsion in water.",
+                "weight": "12.5kg",
+                "size": "2x2x4",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Underwater Propeller",
+                "image": "BWaterPropeller.png",
+                "caption": "Provides propulsion in water.",
+                "weight": "12.5kg",
+                "size": "2x4x2",
+                "hp": "150",
+                "aero": "",
+                "other": "",
+                "about": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "section": "Frame",
+        "overview": "Frame pieces are the basic building blocks and allow you to create the framework for your creations.",
+        "categories": [
+          {
+            "name": "Blocks",
+            "description": "Basic Building Blocks - The most basic piece used for building creations. Has studs on all sides",
+            "blocks": [
+              {
+                "title": "Block 1x2",
+                "image": "BFrame1x2.png",
+                "weight": "0.6kg",
+                "size": "1x2x1",
+                "hp": "200",
+                "aero": "red",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Block 1x3",
+                "image": "BFrame1x3.png",
+                "weight": "0.9kg",
+                "size": "1x3x1",
+                "hp": "200",
+                "aero": "red",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Block 1x4",
+                "image": "BFrame1x4.png",
+                "weight": "1.2kg",
+                "size": "1x4x1",
+                "hp": "200",
+                "aero": "red",
+                "other": "",
+                "about": ""
+              },
+              {
+                "title": "Block 2x4",
+                "image": "BFrame2x4.png",
+                "weight": "2.5kg",
+                "size": "2x4x1",
+             "hp": "200",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Block 2x2x2",
+             "image": "BFrame2x2.png",
+             "weight": "2.5kg", 
+             "size": "2x2x2",
+             "hp": "200",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Block 4x8",
+             "image": "BFrame4x8.png",
+             "weight": "10kg",
+             "size": "4x8x1", 
+             "hp": "400",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           }
+         ]
+       },
+       {
+         "name": "Grid Blocks",
+         "description": "A metal pole for crafting Grids. The blocks are surprisingly light for being metal. From light testing, appears to be similar durability to normal blocks.",
+         "blocks": [
+           {
+             "title": "Grid Block 1x2",
+             "image": "BGrid1x2.png",
+             "weight": "0.3kg",
+             "size": "1x2x1",
+             "hp": "200",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Grid Block 1x4",
+             "image": "BGrid1x4.png",
+             "weight": "0.6kg",
+             "size": "1x4x1",
+             "hp": "200",
+             "aero": "",
+             "other": "",
+             "about": ""
+           }
+         ]
+       },
+       {
+         "name": "Connectors",
+         "description": "Flat connection bar - A lanky piece with only two studs on one side of the connector. Useful when trying to limit connections between blocks, i.e., when turning or other mechanical parts.",
+         "blocks": [
+           {
+             "title": "Flat Connector 1x2",
+             "image": "BConnector1x2.png",
+             "weight": "0.1kg",
+             "size": "1x2x1",
+             "hp": "200",
+             "aero": "none",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Flat Connector 1x3",
+             "image": "BConnector1x3.png",
+             "weight": "0.2kg",
+             "size": "1x3x1",
+             "hp": "200",
+             "aero": "none",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Flat Connector 1x4",
+             "image": "BConnector1x4.png",
+             "weight": "0.2kg",
+             "size": "1x4x1",
+             "hp": "200",
+             "aero": "none",
+             "other": "",
+             "about": ""
+           }
+         ]
+       },
+       {
+         "name": "Shield",
+         "description": "Armor for your vehicle - Used as defense against projectiles launched from the cannons, Also useful for covering up studs on blocks for a sleeker look.",
+         "blocks": [
+           {
+             "title": "Shield 2x1",
+             "image": "BShield1x2.png",
+             "weight": "0.6kg",
+             "size": "2x1x1",
+             "hp": "200",
+             "aero": "green",
+             "other": "Bullets deal *0.3 dmg against shield blocks",
+             "about": ""
+           },
+           {
+             "title": "Shield 2x2",
+             "image": "BShield2x2.png",
+             "weight": "1.2kg",
+             "size": "2x2x1",
+             "hp": "200",
+             "aero": "green",
+             "other": "Bullets deal *0.3 dmg against shield blocks",
+             "about": ""
+           },
+           {
+             "title": "Shield 2x4",
+             "image": "BShield2x4.png",
+             "weight": "2.5kg",
+             "size": "2x4x1",
+             "hp": "200",
+             "aero": "Bullets deal *0.3 dmg against shield blocks",
+             "other": "",
+             "about": ""
+           }
+         ]
+       },
+       {
+         "name": "Others",
+         "description": "Miscellaneous frame blocks",
+         "blocks": [
+           {
+             "title": "Small Porthole",
+             "image": "BPorthole2x2.png",
+             "weight": "1.2kg",
+             "size": "1x2x1",
+             "hp": "200",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Large Porthole",
+             "image": "BPorthole4x4.png",
+             "weight": "5kg",
+             "size": "4x4x3",
+             "hp": "300",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Airplane Window",
+             "image": "BWindow.png",
+             "weight": "1.1kg",
+             "size": "2x2x1",
+             "hp": "200",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Mast",
+             "image": "BMast.png",
+             "weight": "5kg",
+             "size": "2x8x2",
+             "hp": "400",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Short Truss Block",
+             "image": "BShortTruss.png",
+             "weight": "",
+             "size": "2x2x2",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Long Truss Block",
+             "image": "BTrussLong.png",
+             "weight": "",
+             "size": "2x2x8",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Windshield",
+             "image": "BWindshield.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "L Bracket",
+             "image": "BBracketL.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "U Bracket",
+             "image": "BBracketU.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Small Fender",
+             "image": "BFenderS.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Medium Fender",
+             "image": "BFenderM.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Large Fender",
+             "image": "BFenderL.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Long Hood",
+             "image": "BHoodL.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Modern Hood",
+             "image": "BHoodM.png",
+             "weight": "",
+             "size": "",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": ""
+           }
+         ]
+       }
+     ]
+   },
+   {
+     "section": "Seats",
+     "overview": "Blocks you can sit in to control your vehicle.",
+     "categories": [
+       {
+         "name": "Seats",
+         "description": "Vehicle control seats",
+         "blocks": [
+           {
+             "title": "Seat",
+             "image": "BSeat_Default.png",
+             "caption": "Vehicle seat with fortified roll cage.",
+             "weight": "31.7666 kg",
+             "size": "2x4x4",
+             "hp": "1000",
+             "aero": "orange",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "VIP Seat",
+             "image": "BSeat_VIP.png",
+             "caption": "A special seat for a VIP -You!",
+             "weight": "32.0166 kg",
+             "size": "2x4x4",
+             "hp": "1000",
+             "aero": "yellow",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Armoured Seat",
+             "image": "BSeat_Armored.png",
+             "caption": "A seat that is highly resistant to impact damage. Offers high protection from explosives",
+             "weight": "50 kg",
+             "size": "2x4x3",
+             "hp": "1500",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Cockpit",
+             "image": "BSeat_Cockpit.png",
+             "caption": "An aerodynamic flight seat.",
+             "weight": "25 kg",
+             "size": "2x5x3",
+             "hp": "1000",
+             "aero": "green",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Space Fighter Cockpit",
+             "image": "BSeat_SpaceFighter.png",
+             "caption": "A slick seat for your spaceship.",
+             "weight": "25 kg",
+             "size": "2x6x3",
+             "hp": "1000",
+             "aero": "green",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Large Cockpit",
+             "image": "BSeat_LCockpit.png",
+             "caption": "A large aerodynamic flight seat.",
+             "weight": "50 kg",
+             "size": "4x6x5",
+             "hp": "1000",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Spaceship Cockpit",
+             "image": "BSeat_Space.png",
+             "caption": "To infinity and beyond!",
+             "weight": "50 kg",
+             "size": "4x4x4",
+             "hp": "1000",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Go-Kart Seat",
+             "image": "BSeat_Kart.png",
+             "caption": "A light seat that provides very little protection.",
+             "weight": "17.5 kg",
+             "size": "2x4x3",
+             "hp": "1000",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "OperatorSeat",
+             "image": "BSeat_Operator.png",
+             "caption": "Upright seat with stick controls for the pilot.",
+             "weight": "30 kg",
+             "size": "2x3x4",
+             "hp": "1000",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Diving Bell",
+             "image": "BSeat_Sub.png",
+             "caption": "An underwater seat for submersible vehicles.",
+             "weight": "30 kg",
+             "size": "4x4x4",
+             "hp": "1000",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Motorcycle Seat",
+             "image": "BSeat_Bike.png",
+             "caption": "A seat for a motorcycle.",
+             "weight": "17.5 kg",
+             "size": "3x4x3",
+             "hp": "1000",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Ship's Wheel",
+             "image": "BSeat_Ship.png",
+             "caption": "Used to steer a ship.",
+             "weight": "30 kg",
+             "size": "4x2x5",
+             "hp": "1000",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Crow's Nest",
+             "image": "BSeat_Crow.png",
+             "caption": "Used to steer a ship from high up in the mast.",
+             "weight": "30 kg",
+             "size": "4x4x5",
+             "hp": "1000",
+             "aero": "olive",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Car Seat",
+             "image": "SA_01.png",
+             "caption": "",
+             "weight": "",
+             "size": "2x3x4",
+             "hp": "1000",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Racing Seat",
+             "image": "SA_01.png",
+             "caption": "",
+             "weight": "",
+             "size": "",
+             "hp": "1000",
+             "aero": "",
+             "other": "",
+             "about": ""
+           },
+           {
+             "title": "Chirpo Passenger Seat",
+             "image": "BSeat_Chirpo.png",
+             "caption": "Fits a single Chirpo passenger.",
+             "weight": "10 kg",
+             "size": "2x2x4",
+             "hp": "1000",
+             "aero": "red",
+             "other": "",
+             "about": ""
+           }
+         ]
+       }
+     ]
+   },
+   {
+     "section": "Wheels",
+     "overview": "Wheels are blocks in Trailmakers. They are used to make something move better on the ground.",
+     "categories": [
+       {
+         "name": "Wheels",
+         "description": "Various wheel types for different terrain and uses",
+         "blocks": [
+           {
+             "title": "Offroad Wheel",
+             "image": "BWheelOffroad.png",
+             "caption": "Slightly better traction on rough terrain than on tarmac.",
+             "weight": "10kg",
+             "size": "2x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "The starter wheels in the campaign. They are a medium sized wheel with solid performance on grass/sand/etc. However, they will struggle in mud."
+           },
+           {
+             "title": "Racing Wheel",
+             "image": "BWheelRacing.png",
+             "caption": "Better grip on tarmac than rough terrain.",
+             "weight": "10kg",
+             "size": "2x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A medium sized wheel that performs particularly well when on tarmac but entirely fails offroad."
+           },
+           {
+             "title": "Monster Truck Wheel",
+             "image": "BWheelMonster.png",
+             "caption": "Large and heavy wheel with good overall grip.",
+             "weight": "25kg",
+             "size": "4x6x6",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "The largest of all wheels and by far the heaviest. The best wheel in terms of control in mud and offroad terrain, however, it is offset by the fact it will immensely slow a vehicle down due to the weight, friction, and poor aerodynamics."
+           },
+           {
+             "title": "Go-kart Wheel",
+             "image": "BWheelKart.png",
+             "caption": "Small wheel with better grip on tarmac than rough terrain.",
+             "weight": "2kg",
+             "size": "1x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "One of the lightest wheels. Almost no traction on anything other than tarmac."
+           },
+           {
+             "title": "Slim Wheel",
+             "image": "BWheelSlim.png",
+             "caption": "Relatively poor grip and speed, but very light weight.",
+             "weight": "1.5kg",
+             "size": "1x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A medium sized and thin wheel with atrociously bad control, especially in offroad terrain. Despite its description, it is by far the fastest wheel due to its light weight, aerodynamics, and lack of friction, making it excellent for vehicles that don't need to turn much on the ground (such as drag racers or planes that require runways)."
+           },
+           {
+             "title": "Drag Racing Wheel",
+             "image": "BWheelDrag.png",
+             "caption": "Large wheel with better grip on tarmac than rough terrain.",
+             "weight": "20kg",
+             "size": "4x5x5",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "An enormous wheel that's size is only surpassed by the Monster Truck Wheel. It has the best grip of all wheels on paved surfaces and thus does not easily come off the ground or lose control when turning on its intended surface. Despite its name, in terms of speed it's terrible, as it will slow a vehicle down due to the heavy weight and friction."
+           },
+           {
+             "title": "Truck Wheel",
+             "image": "BWheelTruck.png", 
+             "caption": "Large wheel with good overall grip.",
+             "weight": "15kg",
+             "size": "2x5x5",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A large wheel that performs well on offroad terrain. Not nearly as large or heavy as the Monster Truck Wheel and thus, will not slow a vehicle down as much. While it performs better than most wheels in the mud, it will still suffer from some lack of control."
+           },
+           {
+             "title": "Spiked Wheel",
+             "image": "BWheelSpiked.png",
+             "caption": "Good grip on rough terrain.",
+             "weight": "10kg", 
+             "size": "2x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A medium sized wheel with spikes embedded into it. Has excellent grip in offroad terrain, keeping lighter vehicles grounded when driving offroad while only suffering a slight loss in speed compared to the offroad wheels. However, they still perform poorly in mud. An excellent replacement for the offroad wheels if you favor control over speed."
+           },
+           {
+             "title": "Motorcycle Wheel",
+             "image": "BWheelBike.png",
+             "caption": "A rad wheel for your hog. Average grip on all surfaces.",
+             "weight": "7.5kg",
+             "size": "1x3x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A medium sized thin wheel with decent control. A very fast wheel that, unlike the Slim Wheel, has some measure of control. In comparison to dedicated offroad/tarmac wheels however, it's flighty and can easily lose control when turning."
+           },
+           {
+             "title": "Landing Wheels",
+             "image": "BWheelLanding.png",
+             "caption": "A pair of landing wheels to fit under an airplane.",
+             "weight": "7.5kg",
+             "size": "2x2x3",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "Simplest wheel to put underneath a vehicle as it has mounting points on the top. Average grip on all surfaces with slightly better grip on tarmac."
+           },
+           {
+             "title": "Ski",
+             "image": "BWheelSki.png",
+             "caption": "For gliding.",
+             "weight": "0.2kg",
+             "size": "1x4x1",
+             "hp": "",
+             "aero": "",
+             "other": "It costs 20 complexity and is the most complexity expensive block",
+             "about": "Not technically a wheel, but still placed under the category. It very easily slides across the ground. Unlike tires, it does not make use of an engine nor does it rotate, and so it requires another form of propulsion (such as a thruster) in order to make use of it."
+           },
+           {
+             "title": "Hover Block",
+             "image": "BWheelHover.png",
+             "caption": "Lift engine that generates an air cushion under your vehicle.",
+             "weight": "14.1kg",
+             "size": "4x4x1",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "Can float vehicle on water, when it moves very fast."
+           },
+           {
+             "title": "Friction Pad",
+             "image": "BWheelPad.png",
+             "caption": "A pad with very high friction.",
+             "weight": "0.5kg",
+             "size": "1x1x1",
+             "hp": "",
+             "aero": "",
+             "other": "",
+             "about": "A block where one side is a rubber like bump that provides a ton of friction."
+           }
+         ]
+       }
+     ]
+   }
+ ]
+}

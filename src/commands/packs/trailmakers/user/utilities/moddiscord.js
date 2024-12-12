@@ -1,5 +1,4 @@
-// commands/packs/trailmakers/user/modding/moddiscord.js
-import { EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, ApplicationCommandType } from 'discord.js';
 
 export const command = {
     name: 'moddiscord',

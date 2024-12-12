@@ -21,55 +21,102 @@ export async function initHandlers(client) {
 
    // Handle interactions
    client.on('interactionCreate', async interaction => {
-       if (interaction.isCommand()) {
-           await handleCommand(interaction);
-       } else if (interaction.isAutocomplete()) {
-           if (interaction.commandName === 'setup') {
-               if (interaction.options.getFocused(true).name === 'command_packs') {
-                   try {
-                       const packs = await db.getAllPacks();
-                       const nonCorePacks = packs.filter(pack => !pack.is_core);
-                       
-                       const choices = nonCorePacks.map(pack => ({
-                           name: `${pack.category} - ${pack.name}: ${pack.description}`,
-                           value: pack.name
-                       }));
-                       
-                       await interaction.respond(choices);
-                   } catch (error) {
-                       console.error('Error getting pack choices:', error);
-                       await interaction.respond([]);
-                   }
-               } else if (interaction.options.getFocused(true).name === 'enabled_commands') {
-                   const fullInput = interaction.options.getFocused();
-                   const commands = Array.from(client.commands.values())
-                       .filter(cmd => cmd.permissionLevel !== 'owner')
-                       .map(cmd => cmd.name);
-                   
-                   const parts = fullInput.split(',');
-                   const currentValue = parts[parts.length - 1].trim().toLowerCase();
-                   const selectedCommands = parts.slice(0, -1).map(p => p.trim());
-                   
-                   let choices = currentValue === '' ?
-                       ['all', ...commands.filter(cmd => !selectedCommands.includes(cmd))] :
-                       ['all', ...commands.filter(cmd => 
-                           cmd.toLowerCase().includes(currentValue) && 
-                           !selectedCommands.includes(cmd)
-                       )];
-
-                   const suggestions = choices.map(choice => ({
-                       name: choice === 'all' ? 'all' : 
-                           (selectedCommands.length ? 
-                               `${selectedCommands.join(',')},${choice}` : choice),
-                       value: choice === 'all' ? 'all' : 
-                           [...selectedCommands, choice].join(',')
-                   }));
-
-                   await interaction.respond(suggestions.slice(0, 25));
-               }
-           }
-       }
-   });
+    if (interaction.isCommand()) {
+        await handleCommand(interaction);
+        } 
+        else if (interaction.isAutocomplete()) {
+            if (interaction.commandName === 'setup') {
+                if (interaction.options.getFocused(true).name === 'command_packs') {
+                    try {
+                        const packs = await db.getAllPacks();
+                        const nonCorePacks = packs.filter(pack => !pack.is_core);
+                        
+                        const choices = nonCorePacks.map(pack => ({
+                            name: `${pack.category} - ${pack.name}: ${pack.description}`,
+                            value: pack.name
+                        }));
+                        
+                        await interaction.respond(choices);
+                    } catch (error) {
+                        console.error('Error getting pack choices:', error);
+                        await interaction.respond([]);
+                    }
+                } 
+                else if (interaction.options.getFocused(true).name === 'enabled_commands') {
+                    const fullInput = interaction.options.getFocused();
+                    const commands = Array.from(client.commands.values())
+                        .filter(cmd => cmd.permissionLevel !== 'owner')
+                        .map(cmd => cmd.name);
+                    
+                    const parts = fullInput.split(',');
+                    const currentValue = parts[parts.length - 1].trim().toLowerCase();
+                    const selectedCommands = parts.slice(0, -1).map(p => p.trim());
+                    
+                    let choices = currentValue === '' ?
+                        ['all', ...commands.filter(cmd => !selectedCommands.includes(cmd))] :
+                        ['all', ...commands.filter(cmd =>
+                            cmd.toLowerCase().includes(currentValue) &&
+                            !selectedCommands.includes(cmd)
+                        )];
+                    const suggestions = choices.map(choice => ({
+                        name: choice === 'all' ? 'all' :
+                            (selectedCommands.length ?
+                                `${selectedCommands.join(',')},${choice}` : choice),
+                        value: choice === 'all' ? 'all' :
+                            [...selectedCommands, choice].join(',')
+                    }));
+                    await interaction.respond(suggestions.slice(0, 25));
+                }
+            }
+            else if (['block', 'editblock', 'removeblock'].includes(interaction.commandName)) {
+                const focusedOption = interaction.options.getFocused(true);
+                
+                if (focusedOption.name === 'name' || focusedOption.name === 'title') {
+                    try {
+                        const search = focusedOption.value.toLowerCase();
+                        const blocks = await db.searchBlockTitles(interaction.guildId, search);
+                        
+                        await interaction.respond(
+                            blocks.map(block => ({
+                                name: block.title,
+                                value: block.title
+                            }))
+                        );
+                    } catch (error) {
+                        console.error('Error in block autocomplete:', error);
+                        await interaction.respond([]);
+                    }
+                }
+                else if (focusedOption.name === 'category') {
+                    const section = interaction.options.getString('section');
+                    if (!section) {
+                        await interaction.respond([]);
+                        return;
+                    }
+    
+                    try {
+                        const categories = await db.searchCategories(
+                            interaction.guildId,
+                            section,
+                            focusedOption.value || ''
+                        );
+    
+                        console.log('Found categories:', categories);
+    
+                        await interaction.respond(
+                            categories.map(category => ({
+                                name: category,
+                                value: category
+                            }))
+                        );
+                    } catch (error) {
+                        console.error('Error in category autocomplete:', error);
+                        await interaction.respond([]);
+                    }
+                }
+            }
+        }
+    });
 
    client.on('guildMemberAdd', async (member) => {
        const settings = await db.getServerSettings(member.guild.id);

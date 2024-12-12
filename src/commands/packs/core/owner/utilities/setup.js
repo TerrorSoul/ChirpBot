@@ -139,30 +139,58 @@ export const command = {
 
 async function setupCommandPacks(interaction) {
     const selectedPacks = interaction.options.getString('command_packs')?.split(',') || [];
-    
+   
     console.log(`Setting up command packs for guild ${interaction.guildId}:`, selectedPacks);
-    
+   
     for (const packName of selectedPacks) {
         const trimmedPackName = packName.trim();
         if (trimmedPackName) {
             try {
                 console.log(`Enabling pack ${trimmedPackName} for guild ${interaction.guildId}`);
                 const result = await db.enablePack(interaction.guildId, trimmedPackName);
-                
+               
                 if (result) {
                     console.log(`Successfully enabled pack ${trimmedPackName}`);
-                    // Import default quotes after enabling the pack
                     try {
+                        // Import default quotes
                         await db.importDefaultQuotes(interaction.guildId, trimmedPackName);
                         console.log(`Imported default quotes for pack ${trimmedPackName}`);
+                       
+                        // Import default block info if it's the trailmakers pack
+                        if (trimmedPackName === 'trailmakers') {
+                            console.log('Detected trailmakers pack - starting blocks.json import process');
+                            try {
+                                await db.importBlocksData(interaction.guildId, trimmedPackName);
+                                console.log('Successfully completed blocks.json import for trailmakers pack');
+                            } catch (blockError) {
+                                console.error('Failed to import blocks.json:', blockError);
+                                console.error('Full blocks.json import error details:', {
+                                    name: blockError.name,
+                                    message: blockError.message,
+                                    stack: blockError.stack
+                                });
+                            }
+                        } else {
+                            console.log(`Pack ${trimmedPackName} is not trailmakers - skipping blocks.json import`);
+                        }
                     } catch (error) {
-                        console.error(`Error importing quotes for pack ${trimmedPackName}:`, error);
+                        console.error(`Error importing data for pack ${trimmedPackName}:`, error);
+                        console.error('Full error details:', {
+                            name: error.name,
+                            message: error.message,
+                            stack: error.stack
+                        });
                     }
                 } else {
                     console.log(`Failed to enable pack ${trimmedPackName}`);
                 }
             } catch (error) {
                 console.error(`Error enabling pack ${trimmedPackName}:`, error);
+                console.error('Full error details:', {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack
+                });
             }
         }
     }

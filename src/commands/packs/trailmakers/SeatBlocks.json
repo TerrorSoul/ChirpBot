@@ -1,0 +1,183 @@
+{
+  "Section_Type": "Seats",
+  "Overview": "Blocks you can sit in to control your vehicle.",
+  "Summary": "Unless otherwise stated, the HP value displayed is the value after the blocks hidden modifiers, as most blocks share the same 400 base HP.",
+  "Blocks": [
+    {
+      "title": "Seat",
+      "image": "BSeat_Default.png",
+      "caption": "Vehicle seat with fortified roll cage.",
+      "weight": "31.7666 kg",
+      "size": "2x4x4",
+      "hp": 1000,
+      "aero": "orange",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "VIP Seat",
+      "image": "BSeat_VIP.png",
+      "caption": "A special seat for a VIP -You!",
+      "weight": "32.0166 kg",
+      "size": "2x4x4",
+      "hp": 1000,
+      "aero": "yellow",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Armoured Seat",
+      "image": "BSeat_Armored.png",
+      "caption": "A seat that is highly resistant to impact damage. Offers high protection from explosives",
+      "weight": "50 kg",
+      "size": "2x4x3",
+      "hp": 1500,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Cockpit",
+      "image": "BSeat_Cockpit.png",
+      "caption": "An aerodynamic flight seat.",
+      "weight": "25 kg",
+      "size": "2x5x3",
+      "hp": 1000,
+      "aero": "green",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Space Fighter Cockpit",
+      "image": "BSeat_SpaceFighter.png",
+      "caption": "A slick seat for your spaceship.",
+      "weight": "25 kg",
+      "size": "2x6x3",
+      "hp": 1000,
+      "aero": "green",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Large Cockpit",
+      "image": "BSeat_LCockpit.png",
+      "caption": "A large aerodynamic flight seat.",
+      "weight": "50 kg",
+      "size": "4x6x5",
+      "hp": 1000,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Spaceship Cockpit",
+      "image": "BSeat_Space.png",
+      "caption": "To infinity and beyond!",
+      "weight": "50 kg",
+      "size": "4x4x4",
+      "hp": 1000,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Go-Kart Seat",
+      "image": "BSeat_Kart.png",
+      "caption": "A light seat that provides very little protection.",
+      "weight": "17.5 kg",
+      "size": "2x4x3",
+      "hp": 1000,
+      "aero": "red",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "OperatorSeat",
+      "image": "BSeat_Operator.png",
+      "caption": "Upright seat with stick controls for the pilot.",
+      "weight": "30 kg",
+      "size": "2x3x4",
+      "hp": 1000,
+      "aero": "red",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Diving Bell",
+      "image": "BSeat_Sub.png",
+      "caption": "An underwater seat for submersible vehicles.",
+      "weight": "30 kg",
+      "size": "4x4x4",
+      "hp": 1000,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Motorcycle Seat",
+      "image": "BSeat_Bike.png",
+      "caption": "A seat for a motorcycle.",
+      "weight": "17.5 kg",
+      "size": "3x4x3",
+      "hp": 1000,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Ship's Wheel",
+      "image": "BSeat_Ship.png",
+      "caption": "Used to steer a ship.",
+      "weight": "30 kg",
+      "size": "4x2x5",
+      "hp": 1000,
+      "aero": "red",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Crow's Nest",
+      "image": "BSeat_Crow.png",
+      "caption": "Used to steer a ship from high up in the mast.",
+      "weight": "30 kg",
+      "size": "4x4x5",
+      "hp": 1000,
+      "aero": "olive",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Car Seat",
+      "image": "SA_01.png",
+      "caption": "",
+      "weight": "",
+      "size": "2x3x4",
+      "hp": 1000,
+      "aero": "",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Racing Seat",
+      "image": "SA_01.png",
+      "caption": "",
+      "weight": "",
+      "size": "",
+      "hp": 1000,
+      "aero": "",
+      "other": "",
+      "about": ""
+    },
+    {
+      "title": "Chirpo Passenger Seat",
+      "image": "BSeat_Chirpo.png",
+      "caption": "Fits a single Chirpo passenger.",
+      "weight": "10 kg",
+      "size": "2x2x4",
+      "hp": 1000,
+      "aero": "red",
+      "other": "",
+      "about": ""
+    }
+  ]
+}

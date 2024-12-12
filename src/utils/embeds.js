@@ -100,6 +100,63 @@ export function createHelpEmbed(commands) {
     return helpEmbed;
 }
 
+export function createBlockEmbed(blockInfo) {
+    const embed = new EmbedBuilder()
+        .setColor('#1b2838')
+        .setTitle(`🔧 ${blockInfo.title}`)
+        .setDescription(blockInfo.caption || 'No description available');
+
+    if (blockInfo.image) {
+        embed.setImage(`attachment://${blockInfo.image}`);
+    }
+
+    // Clean grouping of specifications
+    const specs = [];
+    if (blockInfo.weight) specs.push(`**Weight:** ${blockInfo.weight}`);
+    if (blockInfo.size) specs.push(`**Size:** ${blockInfo.size}`);
+    if (blockInfo.hp) specs.push(`**HP:** ${blockInfo.hp}`);
+    
+    if (specs.length > 0) {
+        embed.addFields({
+            name: '📊 Specifications',
+            value: specs.join('\n')
+        });
+    }
+
+    // Add section and category info
+    const [section, category] = blockInfo.section.split(' - ');
+    embed.addFields({
+        name: '📁 Classification',
+        value: `**Section:** ${section}${category ? `\n**Category:** ${category}` : ''}`
+    });
+
+    // Add aerodynamics if present
+    if (blockInfo.aero) {
+        embed.addFields({
+            name: '🌪️ Aerodynamics',
+            value: blockInfo.aero
+        });
+    }
+
+    // Add additional information if present
+    if (blockInfo.other) {
+        embed.addFields({
+            name: '📝 Additional Information',
+            value: blockInfo.other
+        });
+    }
+
+    // Add detailed description if present
+    if (blockInfo.about) {
+        embed.addFields({
+            name: '📖 About',
+            value: blockInfo.about
+        });
+    }
+
+    return embed;
+}
+
 export function createWarningEmbed(user, reason, warnedBy) {
     return new EmbedBuilder()
         .setColor('#FF0000')

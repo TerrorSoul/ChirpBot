@@ -1,0 +1,223 @@
+{
+  "Section_Type": "Mechanical Blocks",
+  "Overview": "Blocks with mechanical functions, Mechanical Blocks are blocks that move by the Logic Blocks, seat, or another Mechanical Block.",
+  "Summary": "Mechanical Blocks are blocks with mechanical functions that interact with other components to enable movement and other mechanical actions. They include Hinges, Suspension, Rotators, and Other blocks.",
+  "Blocks": [
+    {
+      "Type": "Hinges",
+      "Type_description": "Blocks with limited rotation, perfect for use in steering or for attaching parts with limited movement.",
+      "Items": [
+        {
+          "title": "Steering Hinge",
+          "image": "BHinge.png",
+          "caption": "Allows a limited angle of rotation perfect for wheels.",
+          "weight": "0.5kg",
+          "size": "1x1x1",
+          "hp": 450,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Large Hinge",
+          "image": "BHingeLarge.png",
+          "caption": "Allows a limited angle of rotation perfect for wheels.",
+          "weight": "1.1kg",
+          "size": "1x2x1",
+          "hp": 450,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Trailer Hinge",
+          "image": "BHingeTrailer.png",
+          "caption": "Ball hinge with two attachment points.",
+          "weight": "5kg",
+          "size": "2x2x1",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Racing Hinge",
+          "image": "BHingeRacing.png",
+          "caption": "Allows a limited angle of rotation perfect for wheels of a fast race car.",
+          "weight": "1.2kg",
+          "size": "2x2x1",
+          "hp": "",
+          "aero": "",
+          "other": "",
+          "about": ""
+        }
+      ]
+    },
+    {
+      "Type": "Suspension",
+      "Type_description": "Blocks that absorb shock to make your vehicle drive smoother on uneven surfaces.",
+      "Items": [
+        {
+          "title": "Suspension Spring",
+          "image": "BSuspension.png",
+          "caption": "Absorbs shock to make your vehicle drive smoother on uneven surfaces.",
+          "weight": "0.5kg",
+          "size": "2x1x3",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Straight Suspension",
+          "image": "BSuspensionStraight.png",
+          "caption": "Absorbs shock to make your vehicle drive smoother on uneven surfaces.",
+          "weight": "0.5kg",
+          "size": "1x1x2",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Large Suspension",
+          "image": "BSuspensionLarge.png",
+          "caption": "",
+          "weight": "",
+          "size": "",
+          "hp": "",
+          "aero": "",
+          "other": "",
+          "about": ""
+        }
+      ]
+    },
+    {
+      "Type": "Rotators",
+      "Type_description": "Blocks that rotate or spin, often used for precise or quick movement.",
+      "Items": [
+        {
+          "title": "Rotating Servo",
+          "image": "BServo.png",
+          "caption": "Block that can slowly rotate in each direction.",
+          "weight": "5kg",
+          "size": "2x2x1",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Spinning Servo",
+          "image": "BServoSpinning.png",
+          "caption": "Block that can spin around quickly.",
+          "weight": "9.1kg",
+          "size": "2x2x2",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Aiming Servo",
+          "image": "BServoAiming.png",
+          "caption": "",
+          "weight": "",
+          "size": "2x1x2",
+          "hp": "",
+          "aero": "",
+          "other": "costs 7 complexity",
+          "about": ""
+        },
+        {
+          "title": "Helicopter Engine",
+          "image": "BHeliEngine.png",
+          "caption": "Block that can spin around quickly.",
+          "powercores": 1,
+          "weight": "5.6kg",
+          "size": "2x2x1",
+          "hp": 150,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Stackable Helicopter Engine",
+          "image": "BHeliEngineV2.png",
+          "caption": "A helicopter engine with a static top and bottom.",
+          "powercores": 1,
+          "weight": "5.6kg",
+          "size": "2x2x1",
+          "hp": 150,
+          "aero": "",
+          "other": "",
+          "about": ""
+        }
+      ]
+    },
+    {
+      "Type": "Other",
+      "Type_description": "Miscellaneous blocks with special mechanical functions.",
+      "Items": [
+        {
+          "title": "Piston",
+          "image": "BPiston.png",
+          "caption": "Extendable cylinder that moves back and forth.",
+          "weight": "6.4kg",
+          "size": "1x1x4",
+          "hp": 200,
+          "aero": "",
+          "other": "Useful extension Values: *1/2 block - 0.17 *1 block - 0.33 *3/2 blocks - 0.5 *2 blocks - 0.67 *5/2 blocks - 0.84",
+          "about": ""
+        },
+        {
+          "title": "Detachable Block",
+          "image": "BDetachable.png",
+          "caption": "Detaches the structure it is attached to.",
+          "weight": "1.6kg",
+          "size": "2x1x1",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Gyro",
+          "image": "BGyroActuator.png",
+          "caption": "Adds rotational control and damping to your vehicle.",
+          "powercores": 1,
+          "weight": "5.6kg",
+          "size": "1x2x2",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Gyro Stabilizer",
+          "image": "BGyroStabilizer.png",
+          "caption": "Stabilizing gyro that slowly rotates your vehicle towards the up direction of the block.",
+          "powercores": 1,
+          "weight": "5.6kg",
+          "size": "1x2x3",
+          "hp": 200,
+          "aero": "",
+          "other": "",
+          "about": ""
+        },
+        {
+          "title": "Power Coupling",
+          "image": "BCoupling.png",
+          "caption": "A flexible electric connection between blocks.",
+          "powercores": 1,
+          "weight": "0.3kg",
+          "size": "1x4x1",
+          "hp": 200,
+          "aero": "none",
+          "other": "",
+          "about": ""
+        }
+      ]
+    }
+  ]
+}
