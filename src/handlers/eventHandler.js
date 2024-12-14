@@ -1,7 +1,7 @@
 // eventHandler.js
 import { loadCommands, handleCommand } from './commandHandler.js';
 import { initMistral } from '../services/mistralService.js';
-import { EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, ChannelType, REST, Routes } from 'discord.js';
 import db from '../database/index.js';
 
 export async function initHandlers(client) {
@@ -284,6 +284,48 @@ export async function initHandlers(client) {
             console.log('Commands reloaded successfully');
         } catch (error) {
             console.error('Error reloading commands:', error);
+        }
+    });
+
+    client.on('guildCreate', async (guild) => {
+        console.log(`Joined new guild: ${guild.name}`);
+        
+        try {
+            const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+            
+            // Register core commands for the new guild
+            const coreCommands = Array.from(client.guildCommands.values())
+                .filter(cmd => cmd.pack === 'core');
+                
+            console.log(`Registering ${coreCommands.length} core commands for new guild: ${guild.name}`);
+            
+            await rest.put(
+                Routes.applicationGuildCommands(client.user.id, guild.id),
+                { body: coreCommands }
+            );
+            
+            // Send welcome message
+            const channel = guild.channels.cache
+                .find(channel => 
+                    channel.type === ChannelType.GuildText && 
+                    channel.permissionsFor(guild.members.me).has('SendMessages')
+                );
+                               
+            if (channel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('Thanks for adding me!')
+                    .setColor('#00FF00')
+                    .setDescription('To get started, please have the server owner run `/setup`. This will enable all bot features and commands.')
+                    .addFields({
+                        name: 'Next Steps',
+                        value: '1. Run `/setup`\n2. Choose quick or manual setup\n3. Select desired command packs\n4. Configure server settings'
+                    });
+                
+                await channel.send({ embeds: [embed] });
+            }
+            
+        } catch (error) {
+            console.error('Error setting up new guild:', error);
         }
     });
 

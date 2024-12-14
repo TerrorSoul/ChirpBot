@@ -1,5 +1,5 @@
 // commands/packs/core/owner/management/setup.js
-import { ApplicationCommandOptionType, ChannelType, EmbedBuilder } from 'discord.js';
+import { ApplicationCommandOptionType, ChannelType, EmbedBuilder, REST, Routes } from 'discord.js';
 import db from '../../../../../database/index.js';
 import { logAction } from '../../../../../utils/logging.js';
 import { WELCOME_MESSAGES } from '../../../../../config/constants.js';
@@ -116,12 +116,27 @@ export const command = {
             console.log('Setting up command packs...');
             await setupCommandPacks(interaction);
             
-            console.log('Triggering command reload...');
-            interaction.client.emit('reloadCommands');
+            // Register guild commands
+            const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
             
-            console.log('Setup completed successfully');
+            // Get enabled packs for this guild
+            const enabledPacks = await db.getEnabledPacks(interaction.guildId);
+            const enabledPackNames = enabledPacks.map(pack => pack.name);
             
+            // Filter commands based on enabled packs
+            const guildCommandsArray = Array.from(interaction.client.guildCommands.values())
+                .filter(cmd => cmd.pack === 'core' || enabledPackNames.includes(cmd.pack));
+            
+            console.log(`Registering ${guildCommandsArray.length} guild commands for ${interaction.guild.name}`);
+            
+            await rest.put(
+                Routes.applicationGuildCommands(interaction.client.user.id, interaction.guildId),
+                { body: guildCommandsArray }
+            );
 
+            interaction.client.emit('reloadCommands');
+
+            console.log('Setup completed successfully');
             await logAction(interaction.guildId, 'SETUP', interaction.user.id, 'Bot configuration completed');
 
             const embed = await createSetupSummaryEmbed(interaction, settings);
@@ -197,78 +212,93 @@ async function setupCommandPacks(interaction) {
 }
 
 async function quickSetup(interaction) {
-   const cooldown = interaction.options.getInteger('cooldown') ?? 5;
-   const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
-   const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
-   const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
-   
-   const modRole = await interaction.guild.roles.create({
-       name: 'Bot Moderator',
-       color: 0x0000FF,
-       reason: 'Bot setup - moderator role'
-   });
-
-   const logChannel = await interaction.guild.channels.create({
-       name: 'logs',
-       type: ChannelType.GuildText,
-       permissionOverwrites: [
-           {
-               id: interaction.guild.id,
-               deny: ['ViewChannel']
-           },
-           {
-               id: modRole.id,
-               allow: ['ViewChannel']
-           }
-       ]
-   });
-
-   const reportsChannel = await interaction.guild.channels.create({
-       name: 'reports',
-       type: ChannelType.GuildText,
-       permissionOverwrites: [
-           {
-               id: interaction.guild.id,
-               deny: ['ViewChannel']
-           },
-           {
-               id: modRole.id,
-               allow: ['ViewChannel', 'SendMessages']
-           }
-       ]
-   });
-
-   const welcomeChannel = await interaction.guild.channels.create({
-       name: 'welcome',
-       type: ChannelType.GuildText,
-       permissionOverwrites: [
-           {
-               id: interaction.guild.id,
-               allow: ['ViewChannel'],
-               deny: ['SendMessages']
-           }
-       ]
-   });
-
-   return {
-       guild_id: interaction.guildId,
-       setup_completed: true,
-       mod_role_id: modRole.id,
-       log_channel_id: logChannel.id,
-       reports_channel_id: reportsChannel.id,
-       welcome_channel_id: welcomeChannel.id,
-       warning_threshold: 3,
-       warning_expire_days: 30,
-       cooldown_seconds: cooldown,
-       welcome_enabled: true,
-       welcome_messages: JSON.stringify(WELCOME_MESSAGES),
-       disabled_commands: '',
-       spam_protection: spamProtection,
-       spam_threshold: spamThreshold,
-       spam_interval: spamInterval * 1000,
-       spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.'
-   };
-}
+    const cooldown = interaction.options.getInteger('cooldown') ?? 5;
+    const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
+    const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
+    const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
+    
+    // If no specific packs were chosen, get all available non-core packs
+    if (!interaction.options.getString('command_packs')) {
+        const allPacks = await db.getAllPacks();
+        const nonCorePacks = allPacks
+            .filter(pack => !pack.is_core)
+            .map(pack => pack.name);
+        
+        // Set the command_packs option
+        interaction.options._hoistedOptions.push({
+            name: 'command_packs',
+            type: ApplicationCommandOptionType.String,
+            value: nonCorePacks.join(',')
+        });
+    }
+    
+    const modRole = await interaction.guild.roles.create({
+        name: 'Bot Moderator',
+        color: 0x0000FF,
+        reason: 'Bot setup - moderator role'
+    });
+ 
+    const logChannel = await interaction.guild.channels.create({
+        name: 'logs',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            {
+                id: interaction.guild.id,
+                deny: ['ViewChannel']
+            },
+            {
+                id: modRole.id,
+                allow: ['ViewChannel']
+            }
+        ]
+    });
+ 
+    const reportsChannel = await interaction.guild.channels.create({
+        name: 'reports',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            {
+                id: interaction.guild.id,
+                deny: ['ViewChannel']
+            },
+            {
+                id: modRole.id,
+                allow: ['ViewChannel', 'SendMessages']
+            }
+        ]
+    });
+ 
+    const welcomeChannel = await interaction.guild.channels.create({
+        name: 'welcome',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            {
+                id: interaction.guild.id,
+                allow: ['ViewChannel'],
+                deny: ['SendMessages']
+            }
+        ]
+    });
+ 
+    return {
+        guild_id: interaction.guildId,
+        setup_completed: true,
+        mod_role_id: modRole.id,
+        log_channel_id: logChannel.id,
+        reports_channel_id: reportsChannel.id,
+        welcome_channel_id: welcomeChannel.id,
+        warning_threshold: 3,
+        warning_expire_days: 30,
+        cooldown_seconds: cooldown,
+        welcome_enabled: true,
+        welcome_messages: JSON.stringify(WELCOME_MESSAGES),
+        disabled_commands: '',
+        spam_protection: spamProtection,
+        spam_threshold: spamThreshold,
+        spam_interval: spamInterval * 1000,
+        spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.'
+    };
+ }
 
 async function manualSetup(interaction) {
    const modRole = interaction.options.getRole('mod_role');
