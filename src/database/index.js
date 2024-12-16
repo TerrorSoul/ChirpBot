@@ -394,7 +394,6 @@ const database = {
     
             console.log(`Found pack with ID ${pack.id}`);
     
-            // Modified this query to explicitly set enabled = 1
             const result = await db.run(`
                 INSERT OR REPLACE INTO server_command_packs 
                 (guild_id, pack_id, enabled) 
@@ -438,6 +437,76 @@ const database = {
            return false;
        }
    },
+
+   getLastWelcomeMessages: async (guildId, limit = 5) => {
+        try {
+            const messages = await db.all(`
+                SELECT message 
+                FROM welcome_message_history 
+                WHERE guild_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            `, [guildId, limit]);
+            
+            return messages.map(m => m.message);
+        } catch (error) {
+            console.error('Error getting last welcome messages:', error);
+            return [];
+        }
+    },
+
+    addWelcomeMessageToHistory: async (guildId, message) => {
+        try {
+            await db.run(`
+                INSERT INTO welcome_message_history (guild_id, message)
+                VALUES (?, ?)
+            `, [guildId, message]);
+            
+            // Keep only the last 10 messages per guild
+            await db.run(`
+                DELETE FROM welcome_message_history 
+                WHERE guild_id = ? 
+                AND id NOT IN (
+                    SELECT id 
+                    FROM welcome_message_history 
+                    WHERE guild_id = ? 
+                    ORDER BY created_at DESC 
+                    LIMIT 10
+                )
+            `, [guildId, guildId]);
+            
+            return true;
+        } catch (error) {
+            console.error('Error adding welcome message to history:', error);
+            return false;
+        }
+    },
+
+    logWelcome: async (guildId, userId, message) => {
+        return await db.run(`
+            INSERT INTO logs (
+                guild_id, 
+                user_id, 
+                action_type, 
+                action_details, 
+                executed_by
+            ) VALUES (?, ?, 'WELCOME', ?, 'SYSTEM')`,
+            [guildId, userId, message]
+        );
+    },
+
+    logRoleAssignment: async (guildId, userId, roleId, reason = 'welcome') => {
+        return await db.run(`
+            INSERT INTO logs (
+                guild_id, 
+                user_id, 
+                action_type, 
+                action_details, 
+                executed_by
+            ) VALUES (?, ?, 'ROLE_ASSIGN', ?, 'SYSTEM')`,
+            [guildId, userId, `Role ${roleId} assigned (${reason})`]
+        );
+    },
 
    // Quote Management
    importDefaultQuotes: async (guildId, packName) => {
