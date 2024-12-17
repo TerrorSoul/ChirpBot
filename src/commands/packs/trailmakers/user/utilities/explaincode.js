@@ -1,4 +1,4 @@
-// commands/packs/core/user/modding/explaincode.js
+// commands/packs/trailmakers/user/utilities/explaincode.js
 import { ApplicationCommandOptionType } from 'discord.js';
 import { explainCode } from '../../../../../services/mistralService.js';
 

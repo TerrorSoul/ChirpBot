@@ -1,4 +1,4 @@
-// commands/packs/core/user/modding/template.js
+// commands/packs/trailmakers/user/utilities/template.js
 import { EmbedBuilder } from 'discord.js';
 
 export const command = {

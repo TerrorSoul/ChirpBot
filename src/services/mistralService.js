@@ -61,3 +61,27 @@ export async function explainCode(code) {
 
     return result.choices[0].message.content;
 }
+
+export async function generateImageRoast(imageUrl) {
+    const chatResult = await mistralClient.chat({
+        model: "pixtral-12b-2409",
+        messages: [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: "Create a sharp and edgy roast for this Trailmakers vehicle. Don't hold back, but keep it suitable for a Discord community server. Focus on what you see in the build and make it witty, snarky, and funny, it can also be sarcastic. Include one emoji. Keep it short (1-2 sentences). Respond without quotation marks surrounding full response."
+                    },
+                    {
+                        type: "image_url",
+                        image_url: imageUrl
+                    }
+                ]
+            }
+        ],
+        temperature: 0.8
+    });
+
+    return chatResult.choices[0].message.content;
+}

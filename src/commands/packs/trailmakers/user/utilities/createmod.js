@@ -1,4 +1,4 @@
-// commands/packs/core/user/modding/createmod.js
+// commands/packs/trailmakers/user/utilities/createmod.js
 import { ApplicationCommandOptionType } from 'discord.js';
 import { generateModCode } from '../../../../../services/mistralService.js';
 

@@ -49,6 +49,7 @@ async function initDatabase() {
                spam_threshold INTEGER DEFAULT 5,
                spam_interval INTEGER DEFAULT 5000,
                spam_warning_message TEXT DEFAULT 'Please do not spam!',
+               channel_restrictions_enabled BOOLEAN DEFAULT FALSE,
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )
@@ -222,6 +223,31 @@ async function initDatabase() {
            )
        `);
 
+       await db.run(`
+        CREATE TABLE IF NOT EXISTS block_of_the_day (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            block_title TEXT NOT NULL,
+            shown_at DATE DEFAULT CURRENT_DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS block_games (
+                channel_id TEXT PRIMARY KEY,
+                block_title TEXT NOT NULL,
+                hints_given INTEGER DEFAULT 0,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS channel_permissions (
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                command_category TEXT,
+                command_name TEXT,
+                PRIMARY KEY (guild_id, channel_id, command_category, command_name)
+        )`);
+
        // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_welcome_history_guild ON welcome_message_history(guild_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_quotes_guild ON quotes(guild_id)`);
@@ -235,6 +261,7 @@ async function initDatabase() {
        await db.run(`CREATE INDEX IF NOT EXISTS idx_server_backups_guild ON server_backups(guild_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_guild ON reports(guild_id, status)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(reported_user_id)`);
+       await db.run('CREATE INDEX IF NOT EXISTS idx_botd_date ON block_of_the_day(shown_at)');
 
        console.log('Database initialized');
    } catch (error) {
@@ -1149,7 +1176,131 @@ const database = {
        stats.pendingReports = results[5].count;
 
        return stats;
-   }
+   },
+
+   getCurrentBOTD: async () => {
+        const today = new Date().toISOString().split('T')[0];
+        return await db.get(
+            'SELECT * FROM block_of_the_day WHERE shown_at = ?',
+            [today]
+        );
+    },
+
+    getRecentBOTDs: async (days = 30) => {
+        return await db.all(`
+            SELECT block_title 
+            FROM block_of_the_day 
+            WHERE shown_at >= date('now', ?) 
+            ORDER BY shown_at DESC`,
+            [`-${days} days`]
+        );
+    },
+
+    setBlockOfTheDay: async (blockTitle) => {
+        const today = new Date().toISOString().split('T')[0];
+        return await db.run(
+            'INSERT INTO block_of_the_day (block_title, shown_at) VALUES (?, ?)',
+            [blockTitle, today]
+        );
+    },
+
+    startBlockGame: async (channelId, blockTitle) => {
+        return await db.run(
+            'INSERT OR REPLACE INTO block_games (channel_id, block_title, hints_given) VALUES (?, ?, 0)',
+            [channelId, blockTitle]
+        );
+    },
+    
+    getActiveGame: async (channelId) => {
+        return await db.get(
+            'SELECT * FROM block_games WHERE channel_id = ?',
+            [channelId]
+        );
+    },
+    
+    incrementHints: async (channelId) => {
+        return await db.run(
+            'UPDATE block_games SET hints_given = hints_given + 1 WHERE channel_id = ?',
+            [channelId]
+        );
+    },
+    
+    endGame: async (channelId) => {
+        return await db.run(
+            'DELETE FROM block_games WHERE channel_id = ?',
+            [channelId]
+        );
+    },
+
+    getChannelPermissions: async (guildId, channelId) => {
+        return await db.all(
+            'SELECT command_category FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category IS NOT NULL',
+            [guildId, channelId]
+        );
+    },
+    
+    getChannelCommandPermissions: async (guildId, channelId) => {
+        return await db.all(
+            'SELECT command_name FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name IS NOT NULL',
+            [guildId, channelId]
+        );
+    },
+    
+    getAllChannelPermissions: async (guildId) => {
+        return await db.all(
+            'SELECT channel_id, command_category, command_name FROM channel_permissions WHERE guild_id = ?',
+            [guildId]
+        );
+    },
+    
+    setChannelPermission: async (guildId, channelId, category) => {
+        return await db.run(
+            'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_category) VALUES (?, ?, ?)',
+            [guildId, channelId, category]
+        );
+    },
+    
+    setChannelCommandPermission: async (guildId, channelId, commandName) => {
+        return await db.run(
+            'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_name) VALUES (?, ?, ?)',
+            [guildId, channelId, commandName]
+        );
+    },
+    
+    removeChannelPermission: async (guildId, channelId, category) => {
+        return await db.run(
+            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category = ?',
+            [guildId, channelId, category]
+        );
+    },
+    
+    removeChannelCommandPermission: async (guildId, channelId, commandName) => {
+        return await db.run(
+            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name = ?',
+            [guildId, channelId, commandName]
+        );
+    },
+    
+    clearChannelPermissions: async (guildId, channelId) => {
+        return await db.run(
+            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ?',
+            [guildId, channelId]
+        );
+    },
+    
+    getChannelsByPermission: async (guildId, category) => {
+        return await db.all(
+            'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_category = ?',
+            [guildId, category]
+        );
+    },
+    
+    getChannelsByCommand: async (guildId, commandName) => {
+        return await db.all(
+            'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_name = ?',
+            [guildId, commandName]
+        );
+    }
 };
 
 // Initialize database

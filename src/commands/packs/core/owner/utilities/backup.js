@@ -15,7 +15,8 @@ export const command = {
                 warnings: [],
                 roleMessages: await db.getAllRoleMessages(interaction.guildId),
                 reports: await db.getPendingReports(interaction.guildId),
-                enabledPacks: await db.getAllPacks()
+                enabledPacks: await db.getAllPacks(),
+                channelPermissions: await db.getAllChannelPermissions(interaction.guildId)
             };
 
             // Get warnings from the database
@@ -46,7 +47,8 @@ export const command = {
                                `• Warnings (${serverData.warnings.length})\n` +
                                `• Role Messages (${serverData.roleMessages.length})\n` +
                                `• Pending Reports (${serverData.reports.length})\n` +
-                               `• Enabled Packs (${serverData.enabledPacks.length})`,
+                               `• Enabled Packs (${serverData.enabledPacks.length})\n` +
+                               `• Channel Permissions (${serverData.channelPermissions.length})`,
                         inline: false 
                     }
                 );

@@ -115,6 +115,41 @@ export async function initHandlers(client) {
                     }
                 }
             }
+            else if (interaction.commandName === 'manageperms') {
+                if (interaction.options.getFocused(true).name === 'command') {
+                    try {
+                        const focused = interaction.options.getFocused().toLowerCase();
+                        
+                        const choices = [
+                            { name: 'Category: Fun', value: 'fun' },
+                            { name: 'Category: Utilities', value: 'utilities' }
+                        ];
+            
+                        // Get accessible commands
+                        const accessibleCommands = Array.from(client.commands.values())
+                            .filter(cmd => !cmd.global && cmd.permissionLevel !== 'owner');
+            
+                        // Add commands to choices
+                        accessibleCommands.forEach(cmd => {
+                            choices.push({
+                                name: `Command: ${cmd.name}`,
+                                value: cmd.name
+                            });
+                        });
+            
+                        // Filter based on input
+                        const filtered = choices.filter(choice => 
+                            choice.name.toLowerCase().includes(focused) ||
+                            choice.value.toLowerCase().includes(focused)
+                        );
+            
+                        await interaction.respond(filtered.slice(0, 25));
+                    } catch (error) {
+                        console.error('Error in manageperms autocomplete:', error);
+                        await interaction.respond([]);
+                    }
+                }
+            }
         }
     });
 

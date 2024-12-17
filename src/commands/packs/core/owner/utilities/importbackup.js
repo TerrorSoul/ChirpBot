@@ -95,6 +95,26 @@ export const command = {
                     }
                 }
 
+                // Import channel permissions
+                if (backupData.data.channelPermissions && backupData.data.channelPermissions.length > 0) {
+                    for (const perm of backupData.data.channelPermissions) {
+                        if (perm.command_category) {
+                            await db.setChannelPermission(
+                                interaction.guildId,
+                                perm.channel_id,
+                                perm.command_category
+                            );
+                        }
+                        if (perm.command_name) {
+                            await db.setChannelCommandPermission(
+                                interaction.guildId,
+                                perm.channel_id,
+                                perm.command_name
+                            );
+                        }
+                    }
+                }
+
                 await db.commitTransaction();
 
                 const embed = new EmbedBuilder()
@@ -110,7 +130,8 @@ export const command = {
                                   `• Warnings (${backupData.data.warnings?.length || 0})\n` +
                                   `• Role Messages (${backupData.data.roleMessages?.length || 0})\n` +
                                   `• Reports (${backupData.data.reports?.length || 0})\n` +
-                                  `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})`,
+                                  `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})\n` +
+                                  `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})`,
                             inline: false 
                         }
                     )
