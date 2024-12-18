@@ -132,9 +132,12 @@ export const command = {
                     }
                 }
 
-                // Import time-based roles
+                // Import time-based roles - sort by days required to maintain hierarchy
                 if (backupData.data.timeBasedRoles?.length > 0) {
-                    for (const roleData of backupData.data.timeBasedRoles) {
+                    // Sort roles by days required, highest first
+                    const sortedRoles = backupData.data.timeBasedRoles.sort((a, b) => b.days_required - a.days_required);
+                    
+                    for (const roleData of sortedRoles) {
                         try {
                             let role = interaction.guild.roles.cache.get(roleData.role_id);
                             
@@ -145,11 +148,21 @@ export const command = {
                                     );
 
                                     if (!existingRole) {
+                                        // Get existing time roles to determine position
+                                        const existingTimeRoles = await db.getTimeBasedRoles(interaction.guildId);
+                                        const higherTimeRoles = existingTimeRoles.filter(r => r.days_required > roleData.days_required);
+                                        const lowestHigherRole = higherTimeRoles.length > 0 
+                                            ? interaction.guild.roles.cache.get(
+                                                higherTimeRoles.sort((a, b) => a.days_required - b.days_required)[0].role_id
+                                              )
+                                            : null;
+
                                         role = await interaction.guild.roles.create({
                                             name: roleData.name || 'Time-Based Role',
                                             color: roleData.color || '#99AAB5',
                                             permissions: new PermissionsBitField([]),
                                             mentionable: false,
+                                            position: lowestHigherRole ? lowestHigherRole.position : 1,
                                             reason: 'Backup restoration - recreating time-based role'
                                         });
                                         createdEntities.timeBasedRoles++;
@@ -222,7 +235,7 @@ export const command = {
                     }
                 }
 
-                // Import other data
+                // Import warnings
                 if (backupData.data.warnings?.length > 0) {
                     for (const warning of backupData.data.warnings) {
                         await db.addWarning(
@@ -234,6 +247,7 @@ export const command = {
                     }
                 }
 
+                // Import role messages
                 if (backupData.data.roleMessages?.length > 0) {
                     for (const msg of backupData.data.roleMessages) {
                         await db.createRoleMessage({
@@ -245,6 +259,7 @@ export const command = {
                     }
                 }
 
+                // Import reports
                 if (backupData.data.reports?.length > 0) {
                     for (const report of backupData.data.reports) {
                         await db.createReport({
@@ -259,6 +274,7 @@ export const command = {
                     }
                 }
 
+                // Import channel permissions
                 if (backupData.data.channelPermissions?.length > 0) {
                     for (const perm of backupData.data.channelPermissions) {
                         if (perm.command_category) {

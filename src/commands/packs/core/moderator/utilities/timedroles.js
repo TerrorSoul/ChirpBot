@@ -115,81 +115,91 @@ export const command = {
        const subcommand = interaction.options.getSubcommand();
 
        switch (subcommand) {
-           case 'add': {
-               const type = interaction.options.getString('type');
-               const days = interaction.options.getInteger('days');
-
-               try {
-                   let role;
-
-                   if (type === 'existing') {
-                       role = interaction.options.getRole('existing_role');
-                       if (!role) {
-                           await interaction.reply({
-                               content: 'Please select an existing role when using the "Use Existing" option.',
-                               ephemeral: true
-                           });
-                           return;
-                       }
-
-                       // Check if role is already time-based
-                       const existing = await db.isTimeBasedRole(interaction.guildId, role.id);
-                       if (existing) {
-                           await interaction.reply({
-                               content: 'This role is already set up as a time-based role.',
-                               ephemeral: true
-                           });
-                           return;
-                       }
-
-                   } else {
-                       const name = interaction.options.getString('name');
-                       const color = interaction.options.getString('color');
-
-                       if (!name || !color) {
-                           await interaction.reply({
-                               content: 'Name and color are required when creating a new role.',
-                               ephemeral: true
-                           });
-                           return;
-                       }
-
-                       // Validate color format
-                       if (!/^#[0-9A-F]{6}$/i.test(color)) {
-                           await interaction.reply({
-                               content: 'Invalid color format. Please use hex format (e.g. #FF0000)',
-                               ephemeral: true
-                           });
-                           return;
-                       }
-
-                       // Create new cosmetic role
-                       role = await interaction.guild.roles.create({
-                           name: name,
-                           color: color,
-                           permissions: new PermissionsBitField([]),
-                           mentionable: false,
-                           reason: `Time-based role for ${days} days of membership`
-                       });
-                   }
-
-                   // Store in database
-                   await db.addTimeBasedRole(interaction.guildId, role.id, days, type === 'new');
-
-                   await interaction.reply({
-                       content: `✅ ${type === 'new' ? 'Created' : 'Added'} role "${role.name}" that will be assigned after ${days} days of membership.`,
-                       ephemeral: true
-                   });
-
-               } catch (error) {
-                   console.error('Error adding time-based role:', error);
-                   await interaction.reply({
-                       content: 'Failed to set up time-based role.',
-                       ephemeral: true
-                   });
-               }
-               break;
-           }
+            case 'add': {
+                const type = interaction.options.getString('type');
+                const days = interaction.options.getInteger('days');
+            
+                try {
+                    let role;
+            
+                    if (type === 'existing') {
+                        role = interaction.options.getRole('existing_role');
+                        if (!role) {
+                            await interaction.reply({
+                                content: 'Please select an existing role when using the "Use Existing" option.',
+                                ephemeral: true
+                            });
+                            return;
+                        }
+            
+                        // Check if role is already time-based
+                        const existing = await db.isTimeBasedRole(interaction.guildId, role.id);
+                        if (existing) {
+                            await interaction.reply({
+                                content: 'This role is already set up as a time-based role.',
+                                ephemeral: true
+                            });
+                            return;
+                        }
+            
+                    } else {
+                        const name = interaction.options.getString('name');
+                        const color = interaction.options.getString('color');
+            
+                        if (!name || !color) {
+                            await interaction.reply({
+                                content: 'Name and color are required when creating a new role.',
+                                ephemeral: true
+                            });
+                            return;
+                        }
+            
+                        // Validate color format
+                        if (!/^#[0-9A-F]{6}$/i.test(color)) {
+                            await interaction.reply({
+                                content: 'Invalid color format. Please use hex format (e.g. #FF0000)',
+                                ephemeral: true
+                            });
+                            return;
+                        }
+            
+                        // Get existing time roles to determine position
+                        const existingTimeRoles = await db.getTimeBasedRoles(interaction.guildId);
+                        const higherTimeRoles = existingTimeRoles.filter(r => r.days_required > days);
+                        const lowestHigherRole = higherTimeRoles.length > 0 
+                            ? interaction.guild.roles.cache.get(
+                                higherTimeRoles.sort((a, b) => a.days_required - b.days_required)[0].role_id
+                            )
+                            : null;
+            
+                        // Create new cosmetic role
+                        role = await interaction.guild.roles.create({
+                            name: name,
+                            color: color,
+                            permissions: new PermissionsBitField([]),
+                            mentionable: false,
+                            position: lowestHigherRole ? lowestHigherRole.position : 1,
+                            reason: `Time-based role for ${days} days of membership`
+                        });
+                    }
+            
+                    // Store in database with role type
+                    await db.addTimeBasedRole(interaction.guildId, role.id, days, type === 'new');
+            
+                    await interaction.reply({
+                        content: `✅ ${type === 'new' ? 'Created' : 'Added'} role "${role.name}" that will be assigned after ${days} days of membership.`,
+                        ephemeral: true
+                    });
+            
+                } catch (error) {
+                    console.error('Error adding time-based role:', error);
+                    await interaction.reply({
+                        content: 'Failed to set up time-based role.',
+                        ephemeral: true
+                    });
+                }
+                break;
+            }
 
             /*case 'edit': {
                 const role = interaction.options.getRole('role');
