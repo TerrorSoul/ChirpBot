@@ -19,46 +19,61 @@ export async function initHandlers(client) {
        }
    });
 
-   // Check time-based roles every hour
-   setInterval(async () => {
-       try {
-           const guilds = client.guilds.cache.values();
-           for (const guild of guilds) {
-               const roles = await db.all(`
-                   SELECT * FROM time_based_roles
-                   WHERE guild_id = ?
-                   ORDER BY days_required ASC
-               `, [guild.id]);
+    // Check time-based roles every 24 hours
+    setInterval(async () => {
+        try {
+            const guilds = client.guilds.cache.values();
+            for (const guild of guilds) {
+                // Get all time-based roles sorted by days required (highest first)
+                const roles = await db.getTimeBasedRoles(guild.id);
+                if (roles.length === 0) continue;
 
-               if (roles.length === 0) continue;
+                roles.sort((a, b) => b.days_required - a.days_required);
+                const members = await guild.members.fetch();
 
-               const members = await guild.members.fetch();
-               for (const member of members.values()) {
-                   if (member.user.bot) continue;
+                // Process members in batches to avoid rate limits
+                const batchSize = 10;
+                const memberBatches = Array.from(members.values())
+                    .filter(member => !member.user.bot)
+                    .reduce((batches, member, i) => {
+                        const batchIndex = Math.floor(i / batchSize);
+                        if (!batches[batchIndex]) batches[batchIndex] = [];
+                        batches[batchIndex].push(member);
+                        return batches;
+                    }, []);
 
-                   const memberAge = Date.now() - member.joinedTimestamp;
-                   const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
+                for (const batch of memberBatches) {
+                    await Promise.all(batch.map(async member => {
+                        const memberDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
 
-                   for (const roleConfig of roles) {
-                       const role = guild.roles.cache.get(roleConfig.role_id);
-                       if (!role) continue;
+                        // Find the highest role the member qualifies for
+                        let highestQualifyingRole = null;
+                        for (const roleConfig of roles) {
+                            if (memberDays >= roleConfig.days_required) {
+                                const role = guild.roles.cache.get(roleConfig.role_id);
+                                if (!role) continue;
 
-                       if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
-                           await member.roles.add(role);
-                           await db.logAction(
-                               guild.id,
-                               'TIME_ROLE_ASSIGN',
-                               member.id,
-                               `Assigned ${role.name} after ${memberDays} days of membership`
-                           );
-                       }
-                   }
-               }
-           }
-       } catch (error) {
-           console.error('Error in time-based role check:', error);
-       }
-   }, 60 * 60 * 1000); // Check every hour
+                                if (!member.roles.cache.has(role.id)) {
+                                    await member.roles.add(role);
+                                    await db.logAction(
+                                        guild.id,
+                                        'TIME_ROLE_ASSIGN',
+                                        member.id,
+                                        `Assigned ${role.name} after ${memberDays} days of membership (daily check)`
+                                    );
+                                }
+                            }
+                        }
+                    }));
+
+                    // Add a small delay between batches to avoid rate limits
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        } catch (error) {
+            console.error('Error in time-based role check:', error);
+        }
+    }, 24 * 60 * 60 * 1000); // Check every 24 hours
 
    // Handle interactions
    client.on('interactionCreate', async interaction => {

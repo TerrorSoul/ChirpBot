@@ -352,52 +352,81 @@ export const command = {
            }
 
            case 'sync': {
-               await interaction.reply({
-                   content: '🔄 Syncing time-based roles for all members...',
-                   ephemeral: true
-               });
-
-               try {
-                   const roles = await db.getTimeBasedRoles(interaction.guildId);
-                   const members = await interaction.guild.members.fetch();
-                   let updated = 0;
-
-                   for (const member of members.values()) {
-                       if (member.user.bot) continue;
-
-                       const memberAge = Date.now() - member.joinedTimestamp;
-                       const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
-
-                       for (const roleConfig of roles) {
-                           const role = interaction.guild.roles.cache.get(roleConfig.role_id);
-                           if (!role) continue;
-
-                           if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
-                               await member.roles.add(role);
-                               await db.logAction(
-                                   interaction.guildId,
-                                   'TIME_ROLE_ASSIGN',
-                                   member.id,
-                                   `Assigned ${role.name} after ${memberDays} days of membership`
-                               );
-                               updated++;
-                           }
-                       }
-                   }
-
-                   await interaction.editReply({
-                       content: `✅ Sync complete! Updated roles for ${updated} members.`,
-                       ephemeral: true
-                   });
-               } catch (error) {
-                   console.error('Error syncing time-based roles:', error);
-                   await interaction.editReply({
-                       content: 'An error occurred while syncing roles.',
-                       ephemeral: true
-                   });
-               }
-               break;
-           }
+                await interaction.reply({
+                    content: '🔄 Syncing time-based roles for all members...',
+                    ephemeral: true
+                });
+            
+                try {
+                    const roles = await db.getTimeBasedRoles(interaction.guildId);
+                    if (roles.length === 0) {
+                        await interaction.editReply({
+                            content: 'No time-based roles configured.',
+                            ephemeral: true
+                        });
+                        return;
+                    }
+            
+                    roles.sort((a, b) => b.days_required - a.days_required);
+                    const members = await interaction.guild.members.fetch();
+                    let updated = 0;
+                    let processed = 0;
+            
+                    const batchSize = 10;
+                    const memberBatches = Array.from(members.values())
+                        .filter(member => !member.user.bot)
+                        .reduce((batches, member, i) => {
+                            const batchIndex = Math.floor(i / batchSize);
+                            if (!batches[batchIndex]) batches[batchIndex] = [];
+                            batches[batchIndex].push(member);
+                            return batches;
+                        }, []);
+            
+                    for (const batch of memberBatches) {
+                        await Promise.all(batch.map(async member => {
+                            const memberDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
+                            processed++;
+            
+                            for (const roleConfig of roles) {
+                                const role = interaction.guild.roles.cache.get(roleConfig.role_id);
+                                if (!role) continue;
+            
+                                if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
+                                    await member.roles.add(role);
+                                    await db.logAction(
+                                        interaction.guildId,
+                                        'TIME_ROLE_ASSIGN',
+                                        member.id,
+                                        `Assigned ${role.name} after ${memberDays} days of membership (sync)`
+                                    );
+                                    updated++;
+                                }
+                            }
+            
+                            if (processed % 50 === 0) {
+                                await interaction.editReply({
+                                    content: `🔄 Progress: ${processed}/${members.size} members checked (${updated} roles updated)...`,
+                                    ephemeral: true
+                                });
+                            }
+                        }));
+            
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+            
+                    await interaction.editReply({
+                        content: `✅ Sync complete! Checked ${processed} members and updated ${updated} roles.`,
+                        ephemeral: true
+                    });
+                } catch (error) {
+                    console.error('Error syncing time-based roles:', error);
+                    await interaction.editReply({
+                        content: 'An error occurred while syncing roles.',
+                        ephemeral: true
+                    });
+                }
+                break;
+            }
        }
    }
 };
