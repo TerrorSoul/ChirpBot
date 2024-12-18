@@ -18,6 +18,60 @@ let serverSettingsCache = new Map();
 let lastCacheCleanup = Date.now();
 const CACHE_CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
+async function updateDatabaseSchema() {
+    try {
+        // Get current schema definition from CREATE TABLE statements
+        const tables = await db.all(`
+            SELECT name, sql 
+            FROM sqlite_master 
+            WHERE type='table' AND sql IS NOT NULL
+        `);
+
+        for (const table of tables) {
+            // Get current columns in the actual table
+            const currentColumns = await db.all(`PRAGMA table_info(${table.name})`);
+            const currentColumnNames = new Set(currentColumns.map(col => col.name));
+
+            // Parse the CREATE TABLE statement to get intended columns
+            const createTableMatch = table.sql.match(/CREATE TABLE.*?\((.*?)\)/s);
+            if (!createTableMatch) continue;
+
+            const columnDefinitions = createTableMatch[1]
+                .split(',')
+                .map(col => col.trim())
+                .filter(col => !col.startsWith('PRIMARY KEY') && !col.startsWith('FOREIGN KEY'));
+
+            // Extract column names and their definitions
+            for (const columnDef of columnDefinitions) {
+                const columnName = columnDef.split(/\s+/)[0];
+                
+                // Skip if column already exists
+                if (currentColumnNames.has(columnName)) continue;
+
+                // Extract the column definition without constraints
+                const definition = columnDef
+                    .replace(/PRIMARY KEY/i, '')
+                    .replace(/REFERENCES.*?$/i, '')
+                    .trim();
+
+                console.log(`Adding missing column ${columnName} to ${table.name}`);
+                
+                try {
+                    await db.run(`ALTER TABLE ${table.name} ADD COLUMN ${definition}`);
+                    console.log(`Successfully added column ${columnName} to ${table.name}`);
+                } catch (error) {
+                    // Log error but continue with other columns
+                    console.error(`Error adding column ${columnName} to ${table.name}:`, error);
+                }
+            }
+        }
+
+        console.log('Database schema update completed');
+    } catch (error) {
+        console.error('Error updating database schema:', error);
+    }
+}
+
 async function initDatabase() {
    try {
        db = await open({
@@ -262,7 +316,7 @@ async function initDatabase() {
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_guild ON reports(guild_id, status)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(reported_user_id)`);
        await db.run('CREATE INDEX IF NOT EXISTS idx_botd_date ON block_of_the_day(shown_at)');
-
+       await updateDatabaseSchema();
        console.log('Database initialized');
    } catch (error) {
        console.error('Database initialization error:', error);

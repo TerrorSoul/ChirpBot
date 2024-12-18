@@ -1,4 +1,4 @@
-// commands/packs/core/owner/management/backup.js
+// commands/packs/core/owner/utilities/backup.js
 import { EmbedBuilder } from 'discord.js';
 import db from '../../../../../database/index.js';
 
@@ -10,20 +10,48 @@ export const command = {
         try {
             await interaction.deferReply({ ephemeral: true });
 
-            const serverData = {
-                settings: await db.getServerSettings(interaction.guildId),
-                warnings: [],
-                roleMessages: await db.getAllRoleMessages(interaction.guildId),
-                reports: await db.getPendingReports(interaction.guildId),
-                enabledPacks: await db.getAllPacks(),
-                channelPermissions: await db.getAllChannelPermissions(interaction.guildId)
+            // get settings to use in Discord data
+            const settings = await db.getServerSettings(interaction.guildId);
+
+            // Get all member roles
+            const userRoles = Array.from(interaction.guild.members.cache.map(member => ({
+                userId: member.id,
+                roles: member.roles.cache
+                    .filter(role => role.id !== interaction.guild.id) // Exclude @everyone role
+                    .map(role => ({
+                        id: role.id,
+                        name: role.name,
+                        color: role.color,
+                        permissions: role.permissions.toString()
+                    }))
+            })));
+
+            // create Discord entity data
+            const discordData = {
+                roles: {
+                    modRole: interaction.guild.roles.cache.get(settings.mod_role_id)?.toJSON()
+                },
+                channels: {
+                    logChannel: interaction.guild.channels.cache.get(settings.log_channel_id)?.toJSON(),
+                    reportsChannel: interaction.guild.channels.cache.get(settings.reports_channel_id)?.toJSON(),
+                    welcomeChannel: settings.welcome_channel_id ? 
+                        interaction.guild.channels.cache.get(settings.welcome_channel_id)?.toJSON() : null
+                }
             };
 
-            // Get warnings from the database
-            const warningsForAllUsers = await db.getAllWarnings(interaction.guildId);
-            serverData.warnings = warningsForAllUsers || [];
+            // create full server data
+            const serverData = {
+                settings: settings,
+                warnings: await db.getAllWarnings(interaction.guildId),
+                roleMessages: await db.getAllRoleMessages(interaction.guildId),
+                reports: await db.getPendingReports(interaction.guildId),
+                enabledPacks: await db.getEnabledPacks(interaction.guildId),
+                channelPermissions: await db.getAllChannelPermissions(interaction.guildId),
+                discordData: discordData,
+                userRoles: userRoles
+            };
 
-            // Create backup file
+            // create the backup file
             const backup = {
                 timestamp: new Date().toISOString(),
                 guild: {
@@ -33,7 +61,7 @@ export const command = {
                 data: serverData
             };
 
-            // Create backup embed
+            // create the backup embed
             const embed = new EmbedBuilder()
                 .setColor('#00FF00')
                 .setTitle('Server Backup Created')
@@ -48,7 +76,9 @@ export const command = {
                                `• Role Messages (${serverData.roleMessages.length})\n` +
                                `• Pending Reports (${serverData.reports.length})\n` +
                                `• Enabled Packs (${serverData.enabledPacks.length})\n` +
-                               `• Channel Permissions (${serverData.channelPermissions.length})`,
+                               `• Channel Permissions (${serverData.channelPermissions.length})\n` +
+                               `• Discord Entities (Roles & Channels)\n` +
+                               `• User Roles (${serverData.userRoles.length} members)`,
                         inline: false 
                     }
                 );

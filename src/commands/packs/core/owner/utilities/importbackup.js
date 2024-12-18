@@ -1,5 +1,5 @@
-// commands/packs/core/owner/management/importbackup.js
-import { ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
+// commands/packs/core/owner/utilities/importbackup.js
+import { ApplicationCommandOptionType, EmbedBuilder, ChannelType } from 'discord.js';
 import { fetch } from 'undici';
 import db from '../../../../../database/index.js';
 
@@ -41,16 +41,153 @@ export const command = {
             await db.beginTransaction();
 
             try {
-                // Import server settings
-                if (backupData.data.settings) {
-                    await db.updateServerSettings(
-                        interaction.guildId,
-                        backupData.data.settings
-                    );
+                const createdEntities = {
+                    modRole: null,
+                    channels: {},
+                    otherRoles: []
+                };
+
+                // recreate the mod role if it doesn't exist
+                const modRoleData = backupData.data.discordData.roles.modRole;
+                if (modRoleData) {
+                    const existingRole = interaction.guild.roles.cache.get(modRoleData.id)
+                        || interaction.guild.roles.cache.find(r => r.name === modRoleData.name);
+                    
+                    if (!existingRole) {
+                        createdEntities.modRole = await interaction.guild.roles.create({
+                            name: modRoleData.name,
+                            color: modRoleData.color,
+                            permissions: BigInt(modRoleData.permissions),
+                            reason: 'Backup restoration - recreating mod role'
+                        });
+                        backupData.data.settings.mod_role_id = createdEntities.modRole.id;
+                    } else {
+                        backupData.data.settings.mod_role_id = existingRole.id;
+                    }
                 }
 
-                // Import warnings
-                if (backupData.data.warnings && backupData.data.warnings.length > 0) {
+                // Recreate channels if they don't exist
+                const channelTypes = ['logChannel', 'reportsChannel', 'welcomeChannel'];
+                for (const channelType of channelTypes) {
+                    const channelData = backupData.data.discordData.channels[channelType];
+                    if (channelData) {
+                        const settingKey = {
+                            logChannel: 'log_channel_id',
+                            reportsChannel: 'reports_channel_id',
+                            welcomeChannel: 'welcome_channel_id'
+                        }[channelType];
+
+                        const existingChannel = interaction.guild.channels.cache.get(channelData.id)
+                            || interaction.guild.channels.cache.find(c => 
+                                c.name === channelData.name && 
+                                c.type === channelData.type
+                            );
+
+                        if (!existingChannel) {
+                            // Create permission overwrites
+                            const permissionOverwrites = [];
+                            
+                            // Server-wide permissions
+                            if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
+                                permissionOverwrites.push({
+                                    id: interaction.guild.id,
+                                    deny: channelType === 'welcomeChannel' ? ['SendMessages'] : ['ViewChannel']
+                                });
+                            }
+
+                            // Mod role permissions
+                            const modRoleId = createdEntities.modRole?.id || backupData.data.settings.mod_role_id;
+                            if (channelData.permissionOverwrites.includes(modRoleId)) {
+                                permissionOverwrites.push({
+                                    id: modRoleId,
+                                    allow: ['ViewChannel', 'SendMessages']
+                                });
+                            }
+
+                            const newChannel = await interaction.guild.channels.create({
+                                name: channelData.name,
+                                type: ChannelType.GuildText,
+                                permissionOverwrites: permissionOverwrites,
+                                position: channelData.rawPosition
+                            });
+
+                            createdEntities.channels[channelType] = newChannel;
+                            backupData.data.settings[settingKey] = newChannel.id;
+                        } else {
+                            backupData.data.settings[settingKey] = existingChannel.id;
+                            // Update permissions of existing channel
+                            const permissionOverwrites = [];
+                            if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
+                                permissionOverwrites.push({
+                                    id: interaction.guild.id,
+                                    deny: channelType === 'welcomeChannel' ? ['SendMessages'] : ['ViewChannel']
+                                });
+                            }
+                            const modRoleId = createdEntities.modRole?.id || backupData.data.settings.mod_role_id;
+                            if (channelData.permissionOverwrites.includes(modRoleId)) {
+                                permissionOverwrites.push({
+                                    id: modRoleId,
+                                    allow: ['ViewChannel', 'SendMessages']
+                                });
+                            }
+                            await existingChannel.permissionOverwrites.set(permissionOverwrites);
+                        }
+                    }
+                }
+
+                // import the server settings
+                await db.updateServerSettings(
+                    interaction.guildId,
+                    backupData.data.settings
+                );
+
+                // import the enabled packs first
+                if (backupData.data.enabledPacks && backupData.data.enabledPacks.length > 0) {
+                    for (const pack of backupData.data.enabledPacks) {
+                        await db.enablePack(interaction.guildId, pack.name);
+                    }
+                }
+
+                // Restore user roles
+                let restoredRolesCount = 0;
+                if (backupData.data.userRoles) {
+                    for (const userData of backupData.data.userRoles) {
+                        try {
+                            const member = await interaction.guild.members.fetch(userData.userId);
+                            if (member) {
+                                for (const roleData of userData.roles) {
+                                    // Find existing role or recreated role
+                                    let role = interaction.guild.roles.cache.get(roleData.id);
+                                    
+                                    if (!role) {
+                                        // Try to find by name
+                                        role = interaction.guild.roles.cache.find(r => r.name === roleData.name);
+                                        
+                                        // Create role if it doesn't exist
+                                        if (!role) {
+                                            role = await interaction.guild.roles.create({
+                                                name: roleData.name,
+                                                color: roleData.color,
+                                                permissions: BigInt(roleData.permissions),
+                                                reason: 'Backup restoration - recreating user role'
+                                            });
+                                            createdEntities.otherRoles.push(role);
+                                        }
+                                    }
+                                    
+                                    await member.roles.add(role.id);
+                                    restoredRolesCount++;
+                                }
+                            }
+                        } catch (error) {
+                            console.error(`Error restoring roles for user ${userData.userId}:`, error);
+                            continue;
+                        }
+                    }
+                }
+
+                // Import the rest of the data...
+                if (backupData.data.warnings?.length > 0) {
                     for (const warning of backupData.data.warnings) {
                         await db.addWarning(
                             interaction.guildId,
@@ -61,8 +198,7 @@ export const command = {
                     }
                 }
 
-                // Import role messages
-                if (backupData.data.roleMessages && backupData.data.roleMessages.length > 0) {
+                if (backupData.data.roleMessages?.length > 0) {
                     for (const msg of backupData.data.roleMessages) {
                         await db.createRoleMessage({
                             message_id: msg.message_id,
@@ -73,8 +209,7 @@ export const command = {
                     }
                 }
 
-                // Import reports
-                if (backupData.data.reports && backupData.data.reports.length > 0) {
+                if (backupData.data.reports?.length > 0) {
                     for (const report of backupData.data.reports) {
                         await db.createReport({
                             guild_id: interaction.guildId,
@@ -88,15 +223,7 @@ export const command = {
                     }
                 }
 
-                // Import enabled packs
-                if (backupData.data.enabledPacks && backupData.data.enabledPacks.length > 0) {
-                    for (const pack of backupData.data.enabledPacks) {
-                        await db.enablePack(interaction.guildId, pack.name);
-                    }
-                }
-
-                // Import channel permissions
-                if (backupData.data.channelPermissions && backupData.data.channelPermissions.length > 0) {
+                if (backupData.data.channelPermissions?.length > 0) {
                     for (const perm of backupData.data.channelPermissions) {
                         if (perm.command_category) {
                             await db.setChannelPermission(
@@ -117,10 +244,30 @@ export const command = {
 
                 await db.commitTransaction();
 
+                // Create status message about recreated entities
+                let recreatedEntitiesMsg = '';
+                if (createdEntities.modRole) {
+                    recreatedEntitiesMsg += '\n• Recreated Mod Role';
+                }
+                if (Object.keys(createdEntities.channels).length > 0) {
+                    recreatedEntitiesMsg += '\n• Recreated Channels: ' + 
+                        Object.keys(createdEntities.channels)
+                            .map(type => backupData.data.discordData.channels[type].name)
+                            .join(', ');
+                }
+                if (createdEntities.otherRoles.length > 0) {
+                    recreatedEntitiesMsg += `\n• Recreated ${createdEntities.otherRoles.length} other roles`;
+                }
+                if (restoredRolesCount > 0) {
+                    recreatedEntitiesMsg += `\n• Restored ${restoredRolesCount} role assignments`;
+                }
+
                 const embed = new EmbedBuilder()
                     .setColor('#00FF00')
                     .setTitle('Backup Import Successful')
-                    .setDescription('Server configuration has been restored from backup.')
+                    .setDescription(`Server configuration has been restored from backup.${
+                        recreatedEntitiesMsg ? '\n\n**Recreated Entities:**' + recreatedEntitiesMsg : ''
+                    }`)
                     .addFields(
                         { name: 'Backup Date', value: backupData.timestamp || 'Unknown', inline: true },
                         { name: 'Original Server', value: backupData.guild.name, inline: true },
@@ -131,7 +278,8 @@ export const command = {
                                   `• Role Messages (${backupData.data.roleMessages?.length || 0})\n` +
                                   `• Reports (${backupData.data.reports?.length || 0})\n` +
                                   `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})\n` +
-                                  `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})`,
+                                  `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})\n` +
+                                  `• User Roles (${restoredRolesCount} assignments)`,
                             inline: false 
                         }
                     )
