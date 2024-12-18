@@ -48,7 +48,8 @@ export const command = {
                 enabledPacks: await db.getEnabledPacks(interaction.guildId),
                 channelPermissions: await db.getAllChannelPermissions(interaction.guildId),
                 discordData: discordData,
-                userRoles: userRoles
+                userRoles: userRoles,
+                timeBasedRoles: await db.getTimeBasedRoles(interaction.guildId)
             };
 
             // create the backup file
@@ -77,6 +78,7 @@ export const command = {
                                `• Pending Reports (${serverData.reports.length})\n` +
                                `• Enabled Packs (${serverData.enabledPacks.length})\n` +
                                `• Channel Permissions (${serverData.channelPermissions.length})\n` +
+                               `• Time-Based Roles (${serverData.timeBasedRoles.length})\n` +
                                `• Discord Entities (Roles & Channels)\n` +
                                `• User Roles (${serverData.userRoles.length} members)`,
                         inline: false 

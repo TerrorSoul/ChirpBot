@@ -20,7 +20,6 @@ const CACHE_CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
 async function updateDatabaseSchema() {
     try {
-        // Get current schema definition from CREATE TABLE statements
         const tables = await db.all(`
             SELECT name, sql 
             FROM sqlite_master 
@@ -39,11 +38,21 @@ async function updateDatabaseSchema() {
             const columnDefinitions = createTableMatch[1]
                 .split(',')
                 .map(col => col.trim())
-                .filter(col => !col.startsWith('PRIMARY KEY') && !col.startsWith('FOREIGN KEY'));
+                // Ignore table constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE)
+                .filter(col => !col.startsWith('PRIMARY KEY') && 
+                             !col.startsWith('FOREIGN KEY') && 
+                             !col.startsWith('UNIQUE'));
 
             // Extract column names and their definitions
             for (const columnDef of columnDefinitions) {
+                // Skip if line is empty after trimming
+                if (!columnDef) continue;
+                
+                // Split on first space to get column name
                 const columnName = columnDef.split(/\s+/)[0];
+                
+                // Skip if column name is empty or not valid
+                if (!columnName || columnName.includes('(')) continue;
                 
                 // Skip if column already exists
                 if (currentColumnNames.has(columnName)) continue;
@@ -52,6 +61,7 @@ async function updateDatabaseSchema() {
                 const definition = columnDef
                     .replace(/PRIMARY KEY/i, '')
                     .replace(/REFERENCES.*?$/i, '')
+                    .replace(/UNIQUE/i, '')
                     .trim();
 
                 console.log(`Adding missing column ${columnName} to ${table.name}`);
@@ -60,7 +70,6 @@ async function updateDatabaseSchema() {
                     await db.run(`ALTER TABLE ${table.name} ADD COLUMN ${definition}`);
                     console.log(`Successfully added column ${columnName} to ${table.name}`);
                 } catch (error) {
-                    // Log error but continue with other columns
                     console.error(`Error adding column ${columnName} to ${table.name}:`, error);
                 }
             }
@@ -301,6 +310,18 @@ async function initDatabase() {
                 command_name TEXT,
                 PRIMARY KEY (guild_id, channel_id, command_category, command_name)
         )`);
+
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS time_based_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                days_required INTEGER NOT NULL,
+                is_custom_created BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, role_id)
+            )
+        `);
 
        // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_welcome_history_guild ON welcome_message_history(guild_id)`);
@@ -1353,6 +1374,59 @@ const database = {
         return await db.all(
             'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_name = ?',
             [guildId, commandName]
+        );
+    },
+
+    addTimeBasedRole: async (guildId, roleId, daysRequired, isCustomCreated = false) => {
+        return await db.run(`
+            INSERT OR REPLACE INTO time_based_roles 
+            (guild_id, role_id, days_required, is_custom_created) 
+            VALUES (?, ?, ?, ?)`,
+            [guildId, roleId, daysRequired, isCustomCreated]
+        );
+    },
+
+    getTimeBasedRoles: async (guildId) => {
+        return await db.all(`
+            SELECT * FROM time_based_roles
+            WHERE guild_id = ?
+            ORDER BY days_required ASC`,
+            [guildId]
+        );
+    },
+
+    removeTimeBasedRole: async (guildId, roleId) => {
+        return await db.run(`
+            DELETE FROM time_based_roles
+            WHERE guild_id = ? AND role_id = ?`,
+            [guildId, roleId]
+        );
+    },
+
+    isTimeBasedRole: async (guildId, roleId) => {
+        const role = await db.get(`
+            SELECT * FROM time_based_roles
+            WHERE guild_id = ? AND role_id = ?`,
+            [guildId, roleId]
+        );
+        return !!role;
+    },
+
+    getRoleTimeRequirement: async (guildId, roleId) => {
+        const role = await db.get(`
+            SELECT days_required FROM time_based_roles
+            WHERE guild_id = ? AND role_id = ?`,
+            [guildId, roleId]
+        );
+        return role ? role.days_required : null;
+    },
+
+    updateTimeBasedRole: async (guildId, roleId, daysRequired) => {
+        return await db.run(`
+            UPDATE time_based_roles 
+            SET days_required = ? 
+            WHERE guild_id = ? AND role_id = ?`,
+            [daysRequired, guildId, roleId]
         );
     }
 };

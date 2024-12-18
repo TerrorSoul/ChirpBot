@@ -19,6 +19,47 @@ export async function initHandlers(client) {
        }
    });
 
+   // Check time-based roles every hour
+   setInterval(async () => {
+       try {
+           const guilds = client.guilds.cache.values();
+           for (const guild of guilds) {
+               const roles = await db.all(`
+                   SELECT * FROM time_based_roles
+                   WHERE guild_id = ?
+                   ORDER BY days_required ASC
+               `, [guild.id]);
+
+               if (roles.length === 0) continue;
+
+               const members = await guild.members.fetch();
+               for (const member of members.values()) {
+                   if (member.user.bot) continue;
+
+                   const memberAge = Date.now() - member.joinedTimestamp;
+                   const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
+
+                   for (const roleConfig of roles) {
+                       const role = guild.roles.cache.get(roleConfig.role_id);
+                       if (!role) continue;
+
+                       if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
+                           await member.roles.add(role);
+                           await db.logAction(
+                               guild.id,
+                               'TIME_ROLE_ASSIGN',
+                               member.id,
+                               `Assigned ${role.name} after ${memberDays} days of membership`
+                           );
+                       }
+                   }
+               }
+           }
+       } catch (error) {
+           console.error('Error in time-based role check:', error);
+       }
+   }, 60 * 60 * 1000); // Check every hour
+
    // Handle interactions
    client.on('interactionCreate', async interaction => {
     if (interaction.isCommand()) {
@@ -364,88 +405,123 @@ export async function initHandlers(client) {
         }
     });
 
-   client.on('messageCreate', async (message) => {
-       // Ignore bot messages and DMs
-       if (message.author.bot || !message.guild) return;
-
-       const settings = await db.getServerSettings(message.guild.id);
-       if (!settings?.spam_protection) return;
-
-       // Check if user has moderator role or is owner (exempt from spam check)
-       if (message.guild.ownerId === message.author.id || 
-           (settings.mod_role_id && message.member.roles.cache.has(settings.mod_role_id))) {
-           return;
-       }
-
-       const spamThreshold = settings.spam_threshold || 5;
-       const spamInterval = settings.spam_interval || 5000; // 5 seconds
-
-       const warnings = await db.getSpamWarnings(message.guild.id, message.author.id);
-       const recentMessages = await message.channel.messages.fetch({ 
-           limit: spamThreshold,
-           before: message.id 
-       });
-
-       const userMessages = recentMessages.filter(msg => 
-           msg.author.id === message.author.id && 
-           message.createdTimestamp - msg.createdTimestamp <= spamInterval
-       );
-
-       if (userMessages.size >= spamThreshold - 1) {
-           // User is spamming
-           const warningCount = warnings ? warnings.warning_count + 1 : 1;
-           await db.addSpamWarning(message.guild.id, message.author.id);
-
-           const warningsLeft = settings.warning_threshold - warningCount;
-           const warningMessage = settings.spam_warning_message
-               .replace('{warnings}', warningsLeft.toString())
-               .replace('{user}', message.author.toString());
-
-           await message.reply(warningMessage);
-
-           // Log the spam warning
-           await db.logAction(
-               message.guild.id,
-               'SPAM_WARNING',
-               message.author.id,
-               `Spam detected in #${message.channel.name}. Warning ${warningCount}/${settings.warning_threshold}`
-           );
-
-           // If user has exceeded warning threshold, ban them
-           if (warningCount >= settings.warning_threshold) {
-               try {
-                   await message.member.ban({
-                       reason: `Exceeded spam warning threshold (${settings.warning_threshold})`
-                   });
-
-                   await db.logAction(
-                       message.guild.id,
-                       'AUTO_BAN',
-                       message.author.id,
-                       'Banned for excessive spam'
-                   );
-
-                   const logChannel = message.guild.channels.cache.get(settings.log_channel_id);
-                   if (logChannel) {
-                       const embed = new EmbedBuilder()
-                           .setColor('#FF0000')
-                           .setTitle('User Auto-Banned')
-                           .setDescription(`${message.author.tag} was automatically banned for excessive spam`)
-                           .addFields(
-                               { name: 'User ID', value: message.author.id, inline: true },
-                               { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
-                               { name: 'Warning Count', value: warningCount.toString(), inline: true }
-                           )
-                           .setTimestamp();
-
-                       await logChannel.send({ embeds: [embed] });
-                   }
-               } catch (error) {
-                   console.error('Error auto-banning user:', error);
-               }
-           }
-       }
-   });
-
-   console.log('Event handlers initialized');
-}
+    client.on('messageCreate', async (message) => {
+        // Ignore bot messages and DMs
+        if (message.author.bot || !message.guild) return;
+  
+        const settings = await db.getServerSettings(message.guild.id);
+        if (!settings?.spam_protection) return;
+  
+        // Check if user has moderator role or is owner (exempt from spam check)
+        if (message.guild.ownerId === message.author.id || 
+            (settings.mod_role_id && message.member.roles.cache.has(settings.mod_role_id))) {
+            return;
+        }
+  
+        const spamThreshold = settings.spam_threshold || 5;
+        const spamInterval = settings.spam_interval || 5000; // 5 seconds
+  
+        const warnings = await db.getSpamWarnings(message.guild.id, message.author.id);
+        const recentMessages = await message.channel.messages.fetch({ 
+            limit: spamThreshold,
+            before: message.id 
+        });
+  
+        const userMessages = recentMessages.filter(msg => 
+            msg.author.id === message.author.id && 
+            message.createdTimestamp - msg.createdTimestamp <= spamInterval
+        );
+  
+        if (userMessages.size >= spamThreshold - 1) {
+            // User is spamming
+            const warningCount = warnings ? warnings.warning_count + 1 : 1;
+            await db.addSpamWarning(message.guild.id, message.author.id);
+  
+            const warningsLeft = settings.warning_threshold - warningCount;
+            const warningMessage = settings.spam_warning_message
+                .replace('{warnings}', warningsLeft.toString())
+                .replace('{user}', message.author.toString());
+  
+            await message.reply(warningMessage);
+  
+            // Log the spam warning
+            await db.logAction(
+                message.guild.id,
+                'SPAM_WARNING',
+                message.author.id,
+                `Spam detected in #${message.channel.name}. Warning ${warningCount}/${settings.warning_threshold}`
+            );
+  
+            // If user has exceeded warning threshold, ban them
+            if (warningCount >= settings.warning_threshold) {
+                try {
+                    await message.member.ban({
+                        reason: `Exceeded spam warning threshold (${settings.warning_threshold})`
+                    });
+  
+                    await db.logAction(
+                        message.guild.id,
+                        'AUTO_BAN',
+                        message.author.id,
+                        'Banned for excessive spam'
+                    );
+  
+                    const logChannel = message.guild.channels.cache.get(settings.log_channel_id);
+                    if (logChannel) {
+                        const embed = new EmbedBuilder()
+                            .setColor('#FF0000')
+                            .setTitle('User Auto-Banned')
+                            .setDescription(`${message.author.tag} was automatically banned for excessive spam`)
+                            .addFields(
+                                { name: 'User ID', value: message.author.id, inline: true },
+                                { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
+                                { name: 'Warning Count', value: warningCount.toString(), inline: true }
+                            )
+                            .setTimestamp();
+  
+                        await logChannel.send({ embeds: [embed] });
+                    }
+                } catch (error) {
+                    console.error('Error auto-banning user:', error);
+                }
+            }
+        }
+    });
+  
+    // Also check time-based roles when a member joins
+    client.on('guildMemberAdd', async (member) => {
+        if (member.user.bot) return;
+  
+        try {
+            const roles = await db.all(`
+                SELECT * FROM time_based_roles
+                WHERE guild_id = ?
+                ORDER BY days_required ASC
+            `, [member.guild.id]);
+  
+            if (roles.length === 0) return;
+  
+            const memberAge = Date.now() - member.joinedTimestamp;
+            const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
+  
+            for (const roleConfig of roles) {
+                const role = member.guild.roles.cache.get(roleConfig.role_id);
+                if (!role) continue;
+  
+                if (memberDays >= roleConfig.days_required) {
+                    await member.roles.add(role);
+                    await db.logAction(
+                        member.guild.id,
+                        'TIME_ROLE_ASSIGN',
+                        member.id,
+                        `Assigned ${role.name} on join after ${memberDays} days of membership`
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('Error checking time-based roles for new member:', error);
+        }
+    });
+  
+    console.log('Event handlers initialized');
+  }

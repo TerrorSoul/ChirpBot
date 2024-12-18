@@ -1,5 +1,5 @@
 // commands/packs/core/owner/utilities/importbackup.js
-import { ApplicationCommandOptionType, EmbedBuilder, ChannelType } from 'discord.js';
+import { ApplicationCommandOptionType, EmbedBuilder, ChannelType, PermissionsBitField } from 'discord.js';
 import { fetch } from 'undici';
 import db from '../../../../../database/index.js';
 
@@ -44,7 +44,8 @@ export const command = {
                 const createdEntities = {
                     modRole: null,
                     channels: {},
-                    otherRoles: []
+                    otherRoles: [],
+                    timeBasedRoles: 0
                 };
 
                 // recreate the mod role if it doesn't exist
@@ -84,10 +85,8 @@ export const command = {
                             );
 
                         if (!existingChannel) {
-                            // Create permission overwrites
                             const permissionOverwrites = [];
                             
-                            // Server-wide permissions
                             if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
                                 permissionOverwrites.push({
                                     id: interaction.guild.id,
@@ -95,7 +94,6 @@ export const command = {
                                 });
                             }
 
-                            // Mod role permissions
                             const modRoleId = createdEntities.modRole?.id || backupData.data.settings.mod_role_id;
                             if (channelData.permissionOverwrites.includes(modRoleId)) {
                                 permissionOverwrites.push({
@@ -115,7 +113,6 @@ export const command = {
                             backupData.data.settings[settingKey] = newChannel.id;
                         } else {
                             backupData.data.settings[settingKey] = existingChannel.id;
-                            // Update permissions of existing channel
                             const permissionOverwrites = [];
                             if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
                                 permissionOverwrites.push({
@@ -131,6 +128,48 @@ export const command = {
                                 });
                             }
                             await existingChannel.permissionOverwrites.set(permissionOverwrites);
+                        }
+                    }
+                }
+
+                // Import time-based roles
+                if (backupData.data.timeBasedRoles?.length > 0) {
+                    for (const roleData of backupData.data.timeBasedRoles) {
+                        try {
+                            let role = interaction.guild.roles.cache.get(roleData.role_id);
+                            
+                            if (roleData.is_custom_created) {
+                                if (!role) {
+                                    const existingRole = interaction.guild.roles.cache.find(r => 
+                                        r.name === roleData.name
+                                    );
+
+                                    if (!existingRole) {
+                                        role = await interaction.guild.roles.create({
+                                            name: roleData.name || 'Time-Based Role',
+                                            color: roleData.color || '#99AAB5',
+                                            permissions: new PermissionsBitField([]),
+                                            mentionable: false,
+                                            reason: 'Backup restoration - recreating time-based role'
+                                        });
+                                        createdEntities.timeBasedRoles++;
+                                    } else {
+                                        role = existingRole;
+                                    }
+                                }
+                            } else if (!role) {
+                                continue; // Skip non-custom roles that don't exist
+                            }
+
+                            await db.addTimeBasedRole(
+                                interaction.guildId,
+                                role.id,
+                                roleData.days_required,
+                                roleData.is_custom_created
+                            );
+                        } catch (error) {
+                            console.error(`Error restoring time-based role:`, error);
+                            continue;
                         }
                     }
                 }
@@ -156,14 +195,11 @@ export const command = {
                             const member = await interaction.guild.members.fetch(userData.userId);
                             if (member) {
                                 for (const roleData of userData.roles) {
-                                    // Find existing role or recreated role
                                     let role = interaction.guild.roles.cache.get(roleData.id);
                                     
                                     if (!role) {
-                                        // Try to find by name
                                         role = interaction.guild.roles.cache.find(r => r.name === roleData.name);
                                         
-                                        // Create role if it doesn't exist
                                         if (!role) {
                                             role = await interaction.guild.roles.create({
                                                 name: roleData.name,
@@ -186,7 +222,7 @@ export const command = {
                     }
                 }
 
-                // Import the rest of the data...
+                // Import other data
                 if (backupData.data.warnings?.length > 0) {
                     for (const warning of backupData.data.warnings) {
                         await db.addWarning(
@@ -244,7 +280,7 @@ export const command = {
 
                 await db.commitTransaction();
 
-                // Create status message about recreated entities
+                // Create status message
                 let recreatedEntitiesMsg = '';
                 if (createdEntities.modRole) {
                     recreatedEntitiesMsg += '\n• Recreated Mod Role';
@@ -254,6 +290,9 @@ export const command = {
                         Object.keys(createdEntities.channels)
                             .map(type => backupData.data.discordData.channels[type].name)
                             .join(', ');
+                }
+                if (createdEntities.timeBasedRoles > 0) {
+                    recreatedEntitiesMsg += `\n• Recreated ${createdEntities.timeBasedRoles} time-based roles`;
                 }
                 if (createdEntities.otherRoles.length > 0) {
                     recreatedEntitiesMsg += `\n• Recreated ${createdEntities.otherRoles.length} other roles`;
@@ -279,6 +318,7 @@ export const command = {
                                   `• Reports (${backupData.data.reports?.length || 0})\n` +
                                   `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})\n` +
                                   `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})\n` +
+                                  `• Time-Based Roles (${backupData.data.timeBasedRoles?.length || 0})\n` +
                                   `• User Roles (${restoredRolesCount} assignments)`,
                             inline: false 
                         }
