@@ -4,6 +4,7 @@ import { open } from 'sqlite';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { clearFilterCache, getCachedFilter, setCachedFilter } from '../utils/filterCache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, '..', 'data', 'bot.db');
@@ -19,66 +20,78 @@ let lastCacheCleanup = Date.now();
 const CACHE_CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
 async function updateDatabaseSchema() {
-    try {
-        const tables = await db.all(`
-            SELECT name, sql 
-            FROM sqlite_master 
-            WHERE type='table' AND sql IS NOT NULL
-        `);
+   try {
+       // Get existing tables
+       const tables = await db.all(`
+           SELECT name, sql 
+           FROM sqlite_master 
+           WHERE type='table' AND sql IS NOT NULL
+       `);
 
-        for (const table of tables) {
-            // Get current columns in the actual table
-            const currentColumns = await db.all(`PRAGMA table_info(${table.name})`);
-            const currentColumnNames = new Set(currentColumns.map(col => col.name));
+       // Add new content filter columns if they don't exist
+       await db.run(`ALTER TABLE server_settings 
+           ADD COLUMN content_filter_enabled BOOLEAN DEFAULT FALSE`).catch(() => {});
+       await db.run(`ALTER TABLE server_settings 
+           ADD COLUMN content_filter_log_suspicious BOOLEAN DEFAULT TRUE`).catch(() => {});
+       await db.run(`ALTER TABLE server_settings 
+           ADD COLUMN content_filter_notify_user BOOLEAN DEFAULT TRUE`).catch(() => {});
+       await db.run(`ALTER TABLE server_settings 
+           ADD COLUMN content_filter_notify_message TEXT 
+           DEFAULT 'Your message was removed because it contained inappropriate content.'`).catch(() => {});
 
-            // Parse the CREATE TABLE statement to get intended columns
-            const createTableMatch = table.sql.match(/CREATE TABLE.*?\((.*?)\)/s);
-            if (!createTableMatch) continue;
+       for (const table of tables) {
+           // Get current columns in the actual table
+           const currentColumns = await db.all(`PRAGMA table_info(${table.name})`);
+           const currentColumnNames = new Set(currentColumns.map(col => col.name));
 
-            const columnDefinitions = createTableMatch[1]
-                .split(',')
-                .map(col => col.trim())
-                // Ignore table constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE)
-                .filter(col => !col.startsWith('PRIMARY KEY') && 
-                             !col.startsWith('FOREIGN KEY') && 
-                             !col.startsWith('UNIQUE'));
+           // Parse the CREATE TABLE statement to get intended columns
+           const createTableMatch = table.sql.match(/CREATE TABLE.*?\((.*?)\)/s);
+           if (!createTableMatch) continue;
 
-            // Extract column names and their definitions
-            for (const columnDef of columnDefinitions) {
-                // Skip if line is empty after trimming
-                if (!columnDef) continue;
-                
-                // Split on first space to get column name
-                const columnName = columnDef.split(/\s+/)[0];
-                
-                // Skip if column name is empty or not valid
-                if (!columnName || columnName.includes('(')) continue;
-                
-                // Skip if column already exists
-                if (currentColumnNames.has(columnName)) continue;
+           const columnDefinitions = createTableMatch[1]
+               .split(',')
+               .map(col => col.trim())
+               // Ignore table constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE)
+               .filter(col => !col.startsWith('PRIMARY KEY') && 
+                            !col.startsWith('FOREIGN KEY') && 
+                            !col.startsWith('UNIQUE'));
 
-                // Extract the column definition without constraints
-                const definition = columnDef
-                    .replace(/PRIMARY KEY/i, '')
-                    .replace(/REFERENCES.*?$/i, '')
-                    .replace(/UNIQUE/i, '')
-                    .trim();
+           // Extract column names and their definitions
+           for (const columnDef of columnDefinitions) {
+               // Skip if line is empty after trimming
+               if (!columnDef) continue;
+               
+               // Split on first space to get column name
+               const columnName = columnDef.split(/\s+/)[0];
+               
+               // Skip if column name is empty or not valid
+               if (!columnName || columnName.includes('(')) continue;
+               
+               // Skip if column already exists
+               if (currentColumnNames.has(columnName)) continue;
 
-                console.log(`Adding missing column ${columnName} to ${table.name}`);
-                
-                try {
-                    await db.run(`ALTER TABLE ${table.name} ADD COLUMN ${definition}`);
-                    console.log(`Successfully added column ${columnName} to ${table.name}`);
-                } catch (error) {
-                    console.error(`Error adding column ${columnName} to ${table.name}:`, error);
-                }
-            }
-        }
+               // Extract the column definition without constraints
+               const definition = columnDef
+                   .replace(/PRIMARY KEY/i, '')
+                   .replace(/REFERENCES.*?$/i, '')
+                   .replace(/UNIQUE/i, '')
+                   .trim();
 
-        console.log('Database schema update completed');
-    } catch (error) {
-        console.error('Error updating database schema:', error);
-    }
+               console.log(`Adding missing column ${columnName} to ${table.name}`);
+               
+               try {
+                   await db.run(`ALTER TABLE ${table.name} ADD COLUMN ${definition}`);
+                   console.log(`Successfully added column ${columnName} to ${table.name}`);
+               } catch (error) {
+                   console.error(`Error adding column ${columnName} to ${table.name}:`, error);
+               }
+           }
+       }
+
+       console.log('Database schema update completed');
+   } catch (error) {
+       console.error('Error updating database schema:', error);
+   }
 }
 
 async function initDatabase() {
@@ -93,30 +106,46 @@ async function initDatabase() {
 
        // Server Settings
        await db.run(`
-           CREATE TABLE IF NOT EXISTS server_settings (
-               guild_id TEXT PRIMARY KEY,
-               setup_completed BOOLEAN DEFAULT FALSE,
-               mod_role_id TEXT,
-               disabled_commands TEXT,
-               welcome_channel_id TEXT,
-               log_channel_id TEXT,
-               reports_channel_id TEXT,
-               warning_threshold INTEGER DEFAULT 3,
-               warning_expire_days INTEGER DEFAULT 30,
-               cooldown_seconds INTEGER DEFAULT 5,
-               welcome_enabled BOOLEAN DEFAULT FALSE,
-               rules_channel_id TEXT,
-               welcome_role_id TEXT,
-               welcome_messages TEXT,
-               spam_protection BOOLEAN DEFAULT TRUE,
-               spam_threshold INTEGER DEFAULT 5,
-               spam_interval INTEGER DEFAULT 5000,
-               spam_warning_message TEXT DEFAULT 'Please do not spam!',
-               channel_restrictions_enabled BOOLEAN DEFAULT FALSE,
-               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-           )
-       `);
+            CREATE TABLE IF NOT EXISTS server_settings (
+                guild_id TEXT PRIMARY KEY,
+                setup_completed BOOLEAN DEFAULT FALSE,
+                mod_role_id TEXT,
+                disabled_commands TEXT,
+                welcome_channel_id TEXT,
+                log_channel_id TEXT,
+                reports_channel_id TEXT,
+                warning_threshold INTEGER DEFAULT 3,
+                warning_expire_days INTEGER DEFAULT 30,
+                cooldown_seconds INTEGER DEFAULT 5,
+                welcome_enabled BOOLEAN DEFAULT FALSE,
+                rules_channel_id TEXT,
+                welcome_role_id TEXT,
+                welcome_messages TEXT,
+                spam_protection BOOLEAN DEFAULT TRUE,
+                spam_threshold INTEGER DEFAULT 5,
+                spam_interval INTEGER DEFAULT 5000,
+                spam_warning_message TEXT DEFAULT 'Please do not spam!',
+                channel_restrictions_enabled BOOLEAN DEFAULT FALSE,
+                content_filter_enabled BOOLEAN DEFAULT FALSE,
+                content_filter_log_suspicious BOOLEAN DEFAULT TRUE,
+                content_filter_notify_user BOOLEAN DEFAULT TRUE,
+                content_filter_notify_message TEXT DEFAULT 'Your message contained inappropriate content.',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+       await db.run(`
+            CREATE TABLE IF NOT EXISTS filtered_terms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                term TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                added_by TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, term)
+            )
+        `);
 
        // Command Packs
        await db.run(`
@@ -337,6 +366,7 @@ async function initDatabase() {
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_guild ON reports(guild_id, status)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(reported_user_id)`);
        await db.run('CREATE INDEX IF NOT EXISTS idx_botd_date ON block_of_the_day(shown_at)');
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_filtered_terms_guild ON filtered_terms(guild_id)`);
        await updateDatabaseSchema();
        console.log('Database initialized');
    } catch (error) {
@@ -1428,6 +1458,58 @@ const database = {
             WHERE guild_id = ? AND role_id = ?`,
             [daysRequired, guildId, roleId]
         );
+    },
+
+    addFilteredTerm: async (guildId, term, severity, addedBy) => {
+        await db.run(
+            'INSERT OR REPLACE INTO filtered_terms (guild_id, term, severity, added_by) VALUES (?, ?, ?, ?)',
+            [guildId, term.toLowerCase(), severity, addedBy]
+        );
+        clearFilterCache(guildId);
+    },
+    
+    removeFilteredTerm: async (guildId, term) => {
+        await db.run(
+            'DELETE FROM filtered_terms WHERE guild_id = ? AND term = ?',
+            [guildId, term.toLowerCase()]
+        );
+        clearFilterCache(guildId);
+    },
+    
+    getFilteredTerms: async (guildId) => {
+        let cached = getCachedFilter(guildId);
+        if (cached) return cached;
+    
+        const terms = await db.all(
+            'SELECT * FROM filtered_terms WHERE guild_id = ?',
+            [guildId]
+        );
+        
+        const result = {
+            explicit: terms.filter(t => t.severity === 'explicit').map(t => t.term),
+            suspicious: terms.filter(t => t.severity === 'suspicious').map(t => t.term)
+        };
+    
+        setCachedFilter(guildId, result);
+        return result;
+    },
+    
+    importDefaultTerms: async (guildId, terms, addedBy) => {
+        try {
+            await database.beginTransaction();
+            
+            for (const term of terms.explicit) {
+                await database.addFilteredTerm(guildId, term, 'explicit', addedBy);
+            }
+            for (const term of terms.suspicious) {
+                await database.addFilteredTerm(guildId, term, 'suspicious', addedBy);
+            }
+            
+            await database.commitTransaction();
+        } catch (error) {
+            await database.rollbackTransaction();
+            throw error;
+        }
     }
 };
 

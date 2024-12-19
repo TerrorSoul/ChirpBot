@@ -113,29 +113,15 @@ export const command = {
                             backupData.data.settings[settingKey] = newChannel.id;
                         } else {
                             backupData.data.settings[settingKey] = existingChannel.id;
-                            const permissionOverwrites = [];
-                            if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
-                                permissionOverwrites.push({
-                                    id: interaction.guild.id,
-                                    deny: channelType === 'welcomeChannel' ? ['SendMessages'] : ['ViewChannel']
-                                });
-                            }
-                            const modRoleId = createdEntities.modRole?.id || backupData.data.settings.mod_role_id;
-                            if (channelData.permissionOverwrites.includes(modRoleId)) {
-                                permissionOverwrites.push({
-                                    id: modRoleId,
-                                    allow: ['ViewChannel', 'SendMessages']
-                                });
-                            }
-                            await existingChannel.permissionOverwrites.set(permissionOverwrites);
                         }
                     }
                 }
 
                 // Import time-based roles - sort by days required to maintain hierarchy
                 if (backupData.data.timeBasedRoles?.length > 0) {
-                    // Sort roles by days required, highest first
-                    const sortedRoles = backupData.data.timeBasedRoles.sort((a, b) => b.days_required - a.days_required);
+                    const sortedRoles = backupData.data.timeBasedRoles.sort((a, b) => 
+                        b.days_required - a.days_required
+                    );
                     
                     for (const roleData of sortedRoles) {
                         try {
@@ -150,10 +136,14 @@ export const command = {
                                     if (!existingRole) {
                                         // Get existing time roles to determine position
                                         const existingTimeRoles = await db.getTimeBasedRoles(interaction.guildId);
-                                        const higherTimeRoles = existingTimeRoles.filter(r => r.days_required > roleData.days_required);
+                                        const higherTimeRoles = existingTimeRoles.filter(r => 
+                                            r.days_required > roleData.days_required
+                                        );
                                         const lowestHigherRole = higherTimeRoles.length > 0 
                                             ? interaction.guild.roles.cache.get(
-                                                higherTimeRoles.sort((a, b) => a.days_required - b.days_required)[0].role_id
+                                                higherTimeRoles.sort((a, b) => 
+                                                    a.days_required - b.days_required
+                                                )[0].role_id
                                               )
                                             : null;
 
@@ -187,13 +177,29 @@ export const command = {
                     }
                 }
 
+                // Import filtered terms if they exist
+                if (backupData.data.filteredTerms) {
+                    // Clear existing terms first
+                    await db.run('DELETE FROM filtered_terms WHERE guild_id = ?', [interaction.guildId]);
+    
+                    // Import explicit terms
+                    for (const term of backupData.data.filteredTerms.explicit) {
+                        await db.addFilteredTerm(interaction.guildId, term, 'explicit', 'SYSTEM');
+                    }
+    
+                    // Import suspicious terms
+                    for (const term of backupData.data.filteredTerms.suspicious) {
+                        await db.addFilteredTerm(interaction.guildId, term, 'suspicious', 'SYSTEM');
+                    }
+                }
+
                 // import the server settings
                 await db.updateServerSettings(
                     interaction.guildId,
                     backupData.data.settings
                 );
 
-                // import the enabled packs first
+                // import the enabled packs
                 if (backupData.data.enabledPacks && backupData.data.enabledPacks.length > 0) {
                     for (const pack of backupData.data.enabledPacks) {
                         await db.enablePack(interaction.guildId, pack.name);
@@ -335,7 +341,11 @@ export const command = {
                                   `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})\n` +
                                   `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})\n` +
                                   `• Time-Based Roles (${backupData.data.timeBasedRoles?.length || 0})\n` +
-                                  `• User Roles (${restoredRolesCount} assignments)`,
+                                  `• User Roles (${restoredRolesCount} assignments)\n` +
+                                  `• Filtered Terms (${
+                                      (backupData.data.filteredTerms?.explicit.length || 0) +
+                                      (backupData.data.filteredTerms?.suspicious.length || 0)
+                                  })`,
                             inline: false 
                         }
                     )
