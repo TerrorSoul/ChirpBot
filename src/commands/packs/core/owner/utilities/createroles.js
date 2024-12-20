@@ -24,11 +24,22 @@ export const command = {
             type: ApplicationCommandOptionType.String,
             description: 'Role IDs to include (comma-separated role @mentions or IDs)',
             required: true
+        },
+        {
+            name: 'type',
+            type: ApplicationCommandOptionType.String,
+            description: 'Selection type: single (one role only) or multi (multiple roles allowed)',
+            required: true,
+            choices: [
+                { name: 'Single Choice', value: 'single' },
+                { name: 'Multiple Choice', value: 'multi' }
+            ]
         }
     ],
     execute: async (interaction) => {
         const title = interaction.options.getString('title');
         const description = interaction.options.getString('description');
+        const selectionType = interaction.options.getString('type');
         
         // Parse roles from the input
         let roleInput = interaction.options.getString('roles');
@@ -45,7 +56,7 @@ export const command = {
 
         const embed = new EmbedBuilder()
             .setTitle(title)
-            .setDescription(description)
+            .setDescription(`${description}`)
             .setColor('#00FF00');
 
         const buttons = [];
@@ -55,7 +66,7 @@ export const command = {
                 if (role) {
                     buttons.push(
                         new ButtonBuilder()
-                            .setCustomId(`role_${roleId}`)
+                            .setCustomId(`role_${selectionType}_${roleId}`)
                             .setLabel(role.name)
                             .setStyle(ButtonStyle.Primary)
                     );
@@ -84,7 +95,8 @@ export const command = {
             guild_id: interaction.guildId,
             message_id: message.id,
             channel_id: interaction.channel.id,
-            roles: roleIds
+            roles: roleIds,
+            selection_type: selectionType
         });
 
         await interaction.reply({

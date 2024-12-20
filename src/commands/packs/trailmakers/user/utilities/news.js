@@ -40,7 +40,6 @@ export const command = {
                 .setTitle(newsItem.title)
                 .setURL(newsItem.url)
                 .setColor('#1b2838')
-                .setDescription(previewContent)
                 .setTimestamp(new Date(newsItem.date * 1000));
 
             // Create button to view full post

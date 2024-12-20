@@ -38,6 +38,8 @@ async function updateDatabaseSchema() {
        await db.run(`ALTER TABLE server_settings 
            ADD COLUMN content_filter_notify_message TEXT 
            DEFAULT 'Your message was removed because it contained inappropriate content.'`).catch(() => {});
+       await db.run(`ALTER TABLE role_messages 
+            ADD COLUMN selection_type TEXT DEFAULT 'multi'`).catch(() => {});
 
        for (const table of tables) {
            // Get current columns in the actual table

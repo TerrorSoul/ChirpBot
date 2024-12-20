@@ -78,9 +78,128 @@ export async function initHandlers(client) {
 
     // Handle interactions
     client.on('interactionCreate', async interaction => {
+        // Command handling
         if (interaction.isCommand()) {
             await handleCommand(interaction);
         } 
+        // Button handling
+        else if (interaction.isButton()) {
+            if (interaction.customId.startsWith('role_')) {
+                const [_, type, roleId] = interaction.customId.split('_');
+                const member = interaction.member;
+                
+                try {
+                    const roleMessage = await db.getRoleMessage(interaction.message.id);
+                    if (!roleMessage) return;
+     
+                    const role = await interaction.guild.roles.fetch(roleId);
+                    if (!role) {
+                        await interaction.reply({
+                            content: 'This role no longer exists.',
+                            ephemeral: true
+                        });
+                        return;
+                    }
+     
+                    if (type === 'single') {
+                        // For single selection, remove all other roles from this role message
+                        const otherRoles = roleMessage.roles.filter(r => r !== roleId);
+                        for (const otherId of otherRoles) {
+                            const otherRole = await interaction.guild.roles.fetch(otherId);
+                            if (otherRole && member.roles.cache.has(otherId)) {
+                                await member.roles.remove(otherId);
+                            }
+                        }
+                    }
+     
+                    if (member.roles.cache.has(roleId)) {
+                        await member.roles.remove(roleId);
+                        await interaction.reply({
+                            content: `Removed role <@&${roleId}>`,
+                            ephemeral: true
+                        });
+                    } else {
+                        await member.roles.add(roleId);
+                        await interaction.reply({
+                            content: `Added role <@&${roleId}>`,
+                            ephemeral: true
+                        });
+                    }
+     
+                    // Log the role change
+                    await db.logAction(
+                        interaction.guildId,
+                        member.roles.cache.has(roleId) ? 'ROLE_REMOVE' : 'ROLE_ADD',
+                        interaction.user.id,
+                        `${member.roles.cache.has(roleId) ? 'Removed' : 'Added'} role ${role.name}`
+                    );
+                } catch (error) {
+                    console.error('Error handling role button:', error);
+                    await interaction.reply({
+                        content: 'There was an error managing your roles. Please try again later.',
+                        ephemeral: true
+                    });
+                }
+            }
+            else if (interaction.customId === 'resolve_report' || interaction.customId === 'delete_report') {
+                const settings = await db.getServerSettings(interaction.guild.id);
+                
+                // Check if user has moderator role
+                if (!interaction.member.roles.cache.has(settings.mod_role_id)) {
+                    return interaction.reply({
+                        content: 'You do not have permission to manage reports.',
+                        ephemeral: true
+                    });
+                }
+     
+                // Get the message that contains the report
+                const reportMessage = interaction.message;
+     
+                try {
+                    if (interaction.customId === 'resolve_report') {
+                        // Update the report status in database
+                        await db.resolveReport(reportMessage.id, interaction.user.id);
+                        
+                        // Edit the message to show it's resolved
+                        const originalEmbed = reportMessage.embeds[0];
+                        const updatedEmbed = EmbedBuilder.from(originalEmbed)
+                            .setColor(0x00FF00)
+                            .setTitle(`✅ ${originalEmbed.data.title} (Resolved)`)
+                            .addFields({
+                                name: 'Resolved By',
+                                value: `${interaction.user.tag}`,
+                                inline: true
+                            });
+     
+                        await reportMessage.edit({
+                            embeds: [updatedEmbed],
+                            components: []
+                        });
+     
+                        await interaction.reply({
+                            content: 'Report marked as resolved.',
+                            ephemeral: true
+                        });
+                    } else {
+                        // Delete the report
+                        await db.deleteReport(reportMessage.id);
+                        await reportMessage.delete();
+                        
+                        await interaction.reply({
+                            content: 'Report deleted.',
+                            ephemeral: true
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error handling report action:', error);
+                    await interaction.reply({
+                        content: 'An error occurred while processing the report action.',
+                        ephemeral: true
+                    });
+                }
+            }
+        }
+        // Autocomplete handling
         else if (interaction.isAutocomplete()) {
             if (interaction.commandName === 'setup') {
                 if (interaction.options.getFocused(true).name === 'command_packs') {
@@ -150,16 +269,16 @@ export async function initHandlers(client) {
                         await interaction.respond([]);
                         return;
                     }
-
+     
                     try {
                         const categories = await db.searchCategories(
                             interaction.guildId,
                             section,
                             focusedOption.value || ''
                         );
-
+     
                         console.log('Found categories:', categories);
-
+     
                         await interaction.respond(
                             categories.map(category => ({
                                 name: category,
@@ -221,7 +340,7 @@ export async function initHandlers(client) {
                             settings.disabled_commands.split(',').filter(cmd => cmd.length > 0) : 
                             []
                         );
-
+     
                         const focusedValue = interaction.options.getFocused().toLowerCase();
                         
                         // Get all commands from enabled packs except core system commands
@@ -237,7 +356,7 @@ export async function initHandlers(client) {
                                 category: cmd.category,
                                 pack: cmd.pack
                             }));
-
+     
                         const filtered = toggleableCommands
                             .filter(cmd => cmd.name.includes(focusedValue))
                             .slice(0, 25)
@@ -245,7 +364,7 @@ export async function initHandlers(client) {
                                 name: `${cmd.name} [${cmd.pack}/${cmd.category}] ${cmd.disabled ? '(Disabled)' : ''}`,
                                 value: cmd.name
                             }));
-
+     
                         await interaction.respond(filtered);
                     } catch (error) {
                         console.error('Error in commandtoggle autocomplete:', error);
@@ -254,158 +373,101 @@ export async function initHandlers(client) {
                 }
             }
         }
-    });
+     });
 
    client.on('guildMemberAdd', async (member) => {
-       const settings = await db.getServerSettings(member.guild.id);
-       
-       if (!settings?.welcome_enabled || !settings.welcome_channel_id) return;
-   
-       const welcomeChannel = member.guild.channels.cache.get(settings.welcome_channel_id);
-       if (!welcomeChannel) return;
-   
-       try {
-           // Add welcome role if configured
-           if (settings.welcome_role_id) {
-               const role = member.guild.roles.cache.get(settings.welcome_role_id);
-               if (role) {
-                   await member.roles.add(role);
-                   await db.logRoleAssignment(member.guild.id, member.id, role.id, 'welcome');
-               }
-           }
-   
-           // Get welcome messages
-           const welcomeMessages = JSON.parse(settings.welcome_messages);
-           
-           // Get last used messages from database
-           const lastMessages = await db.getLastWelcomeMessages(member.guild.id, 5);
-           
-           // Filter out recently used messages
-           const availableMessages = welcomeMessages.filter(msg => 
-               !lastMessages.includes(msg)
-           );
-   
-           // If all messages have been used recently, use any message except the most recent one
-           const messageToUse = availableMessages.length > 0 ? 
-               availableMessages[Math.floor(Math.random() * availableMessages.length)] :
-               welcomeMessages.filter(msg => msg !== lastMessages[0])[
-                   Math.floor(Math.random() * (welcomeMessages.length - 1))
-               ];
-   
-           // Replace {user} with member mention if present
-           const formattedMessage = messageToUse.replace(/\{user\}/g, member.toString());
-           
-           // Store the used message
-           await db.addWelcomeMessageToHistory(member.guild.id, messageToUse);
-           
-           const welcomeEmbed = new EmbedBuilder()
-               .setColor('#00FF00')
-               .setDescription(formattedMessage)
-               .setThumbnail(member.user.displayAvatarURL())
-   
-           if (settings.rules_channel_id) {
-               welcomeEmbed.addFields({
-                   name: 'Important!',
-                   value: `Make sure to check out the rules in <#${settings.rules_channel_id}>!`
-               });
-           }
-   
-           await welcomeChannel.send({ embeds: [welcomeEmbed] });
-           await db.logWelcome(member.guild.id, member.id, formattedMessage);
-       } catch (error) {
-           console.error('Error in welcome message:', error);
-       }
-   });
+        if (member.user.bot) return;
+        
+        try {
+            const settings = await db.getServerSettings(member.guild.id);
+            
+            // Handle welcome messages
+            if (settings?.welcome_enabled && settings.welcome_channel_id) {
+                const welcomeChannel = member.guild.channels.cache.get(settings.welcome_channel_id);
+                if (welcomeChannel && welcomeChannel.permissionsFor(member.guild.members.me).has(['SendMessages', 'ViewChannel'])) {
+                    try {
+                        // Add welcome role if configured
+                        if (settings.welcome_role_id) {
+                            const role = member.guild.roles.cache.get(settings.welcome_role_id);
+                            if (role) {
+                                await member.roles.add(role);
+                                await db.logRoleAssignment(member.guild.id, member.id, role.id, 'welcome');
+                            }
+                        }
 
-   client.on('interactionCreate', async interaction => {
-       if (interaction.isButton()) {
-           if (interaction.customId.startsWith('role_')) {
-               const roleId = interaction.customId.replace('role_', '');
-               const member = interaction.member;
-               
-               try {
-                   if (member.roles.cache.has(roleId)) {
-                       await member.roles.remove(roleId);
-                       await interaction.reply({
-                           content: `Removed role <@&${roleId}>`,
-                           ephemeral: true
-                       });
-                   } else {
-                       await member.roles.add(roleId);
-                       await interaction.reply({
-                           content: `Added role <@&${roleId}>`,
-                           ephemeral: true
-                       });
-                   }
-               } catch (error) {
-                   console.error('Error handling role button:', error);
-                   await interaction.reply({
-                       content: 'There was an error managing your roles. Please try again later.',
-                       ephemeral: true
-                   });
-               }
-           }
-           else if (interaction.customId === 'resolve_report' || interaction.customId === 'delete_report') {
-               const settings = await db.getServerSettings(interaction.guild.id);
-               
-               // Check if user has moderator role
-               if (!interaction.member.roles.cache.has(settings.mod_role_id)) {
-                   return interaction.reply({
-                       content: 'You do not have permission to manage reports.',
-                       ephemeral: true
-                   });
-               }
+                        // Get welcome messages
+                        const welcomeMessages = JSON.parse(settings.welcome_messages);
+                        
+                        // Get last used messages from database
+                        const lastMessages = await db.getLastWelcomeMessages(member.guild.id, 5);
+                        
+                        // Filter out recently used messages
+                        const availableMessages = welcomeMessages.filter(msg => 
+                            !lastMessages.includes(msg)
+                        );
 
-               // Get the message that contains the report
-               const reportMessage = interaction.message;
+                        // If all messages have been used recently, use any message except the most recent one
+                        const messageToUse = availableMessages.length > 0 ? 
+                            availableMessages[Math.floor(Math.random() * availableMessages.length)] :
+                            welcomeMessages.filter(msg => msg !== lastMessages[0])[
+                                Math.floor(Math.random() * (welcomeMessages.length - 1))
+                            ];
 
-               try {
-                   if (interaction.customId === 'resolve_report') {
-                       // Update the report status in database
-                       await db.resolveReport(reportMessage.id, interaction.user.id);
-                       
-                       // Edit the message to show it's resolved
-                       const originalEmbed = reportMessage.embeds[0];
-                       const updatedEmbed = EmbedBuilder.from(originalEmbed)
-                           .setColor(0x00FF00)
-                           .setTitle(`✅ ${originalEmbed.data.title} (Resolved)`)
-                           .addFields({
-                               name: 'Resolved By',
-                               value: `${interaction.user.tag}`,
-                               inline: true
-                           });
+                        // Replace {user} with member mention if present
+                        const formattedMessage = messageToUse.replace(/\{user\}/g, member.toString());
+                        
+                        // Store the used message
+                        await db.addWelcomeMessageToHistory(member.guild.id, messageToUse);
+                        
+                        const welcomeEmbed = new EmbedBuilder()
+                            .setColor('#00FF00')
+                            .setDescription(formattedMessage)
+                            .setThumbnail(member.user.displayAvatarURL());
 
-                       await reportMessage.edit({
-                           embeds: [updatedEmbed],
-                           components: []
-                       });
+                        if (settings.rules_channel_id) {
+                            welcomeEmbed.addFields({
+                                name: 'Important!',
+                                value: `Make sure to check out the rules in <#${settings.rules_channel_id}>!`
+                            });
+                        }
 
-                       await interaction.reply({
-                           content: 'Report marked as resolved.',
-                           ephemeral: true
-                       });
+                        await welcomeChannel.send({ embeds: [welcomeEmbed] });
+                        await db.logWelcome(member.guild.id, member.id, formattedMessage);
+                    } catch (error) {
+                        console.error('Error in welcome message:', error);
+                    }
+                }
+            }
 
-                   } else {
-                       // Delete the report
-                       await db.deleteReport(reportMessage.id);
-                       await reportMessage.delete();
-                       
-                       await interaction.reply({
-                           content: 'Report deleted.',
-                           ephemeral: true
-                       });
-                   }
+            // Handle time-based roles
+            try {
+                const roles = await database.getTimeBasedRoles(member.guild.id);
+                if (roles.length === 0) return;
 
-               } catch (error) {
-                   console.error('Error handling report action:', error);
-                   await interaction.reply({
-                       content: 'An error occurred while processing the report action.',
-                       ephemeral: true
-                   });
-               }
-           }
-       }
-   });
+                const memberAge = Date.now() - member.joinedTimestamp;
+                const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
+
+                for (const roleConfig of roles) {
+                    const role = member.guild.roles.cache.get(roleConfig.role_id);
+                    if (!role) continue;
+
+                    if (memberDays >= roleConfig.days_required) {
+                        await member.roles.add(role);
+                        await db.logAction(
+                            member.guild.id,
+                            'TIME_ROLE_ASSIGN',
+                            member.id,
+                            `Assigned ${role.name} on join after ${memberDays} days of membership`
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking time-based roles for new member:', error);
+            }
+        } catch (error) {
+            console.error('Error handling new member:', error);
+        }
+    });
 
    client.on('messageDelete', async (message) => {
        // Check if the deleted message was a role selection message
@@ -442,13 +504,13 @@ export async function initHandlers(client) {
                 { body: coreCommands }
             );
             
-            // Send welcome message
+            // Find a suitable channel to send welcome message
             const channel = guild.channels.cache
                 .find(channel => 
                     channel.type === ChannelType.GuildText && 
-                    channel.permissionsFor(guild.members.me).has('SendMessages')
+                    channel.permissionsFor(guild.members.me).has(['SendMessages', 'ViewChannel'])
                 );
-                               
+                
             if (channel) {
                 const embed = new EmbedBuilder()
                     .setTitle('Thanks for adding me!')
@@ -557,41 +619,6 @@ export async function initHandlers(client) {
             console.error('Error in message handler:', error);
         }
      });
-  
-    // Also check time-based roles when a member joins
-    client.on('guildMemberAdd', async (member) => {
-        if (member.user.bot) return;
-  
-        try {
-            const roles = await db.all(`
-                SELECT * FROM time_based_roles
-                WHERE guild_id = ?
-                ORDER BY days_required ASC
-            `, [member.guild.id]);
-  
-            if (roles.length === 0) return;
-  
-            const memberAge = Date.now() - member.joinedTimestamp;
-            const memberDays = Math.floor(memberAge / (1000 * 60 * 60 * 24));
-  
-            for (const roleConfig of roles) {
-                const role = member.guild.roles.cache.get(roleConfig.role_id);
-                if (!role) continue;
-  
-                if (memberDays >= roleConfig.days_required) {
-                    await member.roles.add(role);
-                    await db.logAction(
-                        member.guild.id,
-                        'TIME_ROLE_ASSIGN',
-                        member.id,
-                        `Assigned ${role.name} on join after ${memberDays} days of membership`
-                    );
-                }
-            }
-        } catch (error) {
-            console.error('Error checking time-based roles for new member:', error);
-        }
-    });
   
     console.log('Event handlers initialized');
   }
