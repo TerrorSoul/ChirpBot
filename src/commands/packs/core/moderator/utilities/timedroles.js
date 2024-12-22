@@ -142,7 +142,7 @@ export const command = {
                             return;
                         }
             
-                    } else {
+                    } else { // type === 'new'
                         const name = interaction.options.getString('name');
                         const color = interaction.options.getString('color');
             
@@ -201,7 +201,7 @@ export const command = {
                 break;
             }
 
-            /*case 'edit': {
+            /*case 'edit': { // I'll fix this later
                 const role = interaction.options.getRole('role');
                 const days = interaction.options.getInteger('days');
                 const name = interaction.options.getString('name');
