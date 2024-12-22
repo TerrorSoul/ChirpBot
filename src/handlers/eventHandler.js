@@ -441,7 +441,7 @@ export async function initHandlers(client) {
 
             // Handle time-based roles
             try {
-                const roles = await database.getTimeBasedRoles(member.guild.id);
+                const roles = await db.getTimeBasedRoles(member.guild.id);
                 if (roles.length === 0) return;
 
                 const memberAge = Date.now() - member.joinedTimestamp;
