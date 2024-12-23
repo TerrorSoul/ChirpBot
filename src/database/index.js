@@ -323,7 +323,6 @@ async function initDatabase() {
 
        // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_welcome_history_guild ON welcome_message_history(guild_id)`);
-       await db.run(`CREATE INDEX IF NOT EXISTS idx_quotes_guild ON quotes(guild_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_command_packs_name ON command_packs(name)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_server_command_packs ON server_command_packs(guild_id, pack_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_guild_cmd ON command_permissions(guild_id, command_name)`);
@@ -844,7 +843,6 @@ const database = {
         
         const tables = [
             'server_settings',
-            'quotes',
             'warnings',
             'logs',
             'role_messages',
@@ -875,7 +873,6 @@ const database = {
         
         const tables = [
             'server_settings',
-            'quotes',
             'warnings',
             'logs',
             'role_messages',
