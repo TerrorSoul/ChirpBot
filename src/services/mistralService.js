@@ -71,7 +71,7 @@ export async function generateImageRoast(imageUrl) {
                 content: [
                     {
                         type: "text",
-                        text: "Create a sharp and edgy roast for this Trailmakers vehicle. Don't hold back, but keep it suitable for a Discord community server. Focus on what you see in the build and make it witty, snarky, and funny, it can also be sarcastic. Include one emoji. Keep it short (1-2 sentences). Respond without quotation marks surrounding full response."
+                        text: "Create a sharp and edgy roast for this Trailmakers vehicle. Don't hold back, but keep it suitable for a Discord community server. Focus on what you see in the build and make it witty, snarky, and funny, it can also be sarcastic. Include one emoji. Keep it short (1-2 sentences). Respond without quotation marks surrounding full response. It has to contain atleast one Trailmakers block/part, if it is not then say you cannot roast that."
                     },
                     {
                         type: "image_url",
@@ -80,7 +80,42 @@ export async function generateImageRoast(imageUrl) {
                 ]
             }
         ],
-        temperature: 0.8
+        temperature: 0.4
+    });
+
+    return chatResult.choices[0].message.content;
+}
+
+export async function generateRating(imageUrl) {
+    const chatResult = await mistralClient.chat({
+        model: "pixtral-12b-2409",
+        messages: [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: `
+Carefully analyze the image of this Trailmakers build and provide an honest rating. Follow these instructions strictly:
+1. Rate the build from 0 to 10, where 10 is the highest.
+2. If the image does not clearly show at least one Trailmakers block or part, respond: "I cannot rate this."
+3. Only rate based on visible features. Do not assume parts or functionality that are not clearly visible in the image.
+4. Ground vehicles require visible wheels, planes require visible wings, and other types of vehicles must have appropriate functional components visible. If these are missing, give the vehicle a score of 0 or 1.
+5. Use the following template for your response:
+   - Rating: [X]
+   - Feedback: [Provide one realistic, concise sentence about the build, aligned with the score.]
+   
+Image for analysis:
+`
+                    },
+                    {
+                        type: "image_url",
+                        image_url: imageUrl
+                    }
+                ]
+            }
+        ],
+        temperature: 0.2
     });
 
     return chatResult.choices[0].message.content;

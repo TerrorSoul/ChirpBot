@@ -135,15 +135,60 @@ export const command = {
                 ephemeral: true
             });
         }
+    
+        // Check bot permissions first
+        const botMember = interaction.guild.members.cache.get(interaction.client.user.id);
+        if (!botMember.permissions.has('ManageRoles') || !botMember.permissions.has('ManageChannels')) {
+            return interaction.reply({
+                content: 'I need the "Manage Roles" and "Manage Channels" permissions to run setup.',
+                ephemeral: true
+            });
+        }
      
         const existingSettings = await db.getServerSettings(interaction.guildId);
         const isFirstTimeSetup = !existingSettings?.setup_completed;
+        const changedOptions = interaction.options.data.filter(opt => opt.value !== null);
      
         try {
             let settings;
-     
-            // For first-time setup, ask if they want quick setup
-            if (isFirstTimeSetup) {
+    
+            // Check channel permissions if channels are specified
+            const logChannel = interaction.options.getChannel('log_channel');
+            const reportsChannel = interaction.options.getChannel('reports_channel');
+            const welcomeChannel = interaction.options.getChannel('welcome_channel');
+    
+            const channelsToCheck = [logChannel, reportsChannel, welcomeChannel].filter(Boolean);
+            for (const channel of channelsToCheck) {
+                const permissions = channel.permissionsFor(interaction.client.user);
+                if (!permissions.has(['ViewChannel', 'SendMessages'])) {
+                    return interaction.reply({
+                        content: `I don't have permission to send messages in ${channel}. Please give me the "View Channel" and "Send Messages" permissions for that channel.`,
+                        ephemeral: true
+                    });
+                }
+            }
+    
+            if (changedOptions.length > 0) {
+                // Single or multiple setting update
+                settings = await manualSetup(interaction);
+                if (existingSettings) {
+                    settings = {
+                        ...existingSettings,
+                        ...settings,
+                        setup_completed: true
+                    };
+                } else {
+                    settings = {
+                        ...settings,
+                        setup_completed: true
+                    };
+                }
+                await interaction.reply({ 
+                    content: 'Updating configuration...', 
+                    ephemeral: true 
+                });
+            }
+            else if (isFirstTimeSetup) {
                 const row = new ActionRowBuilder()
                     .addComponents(
                         new ButtonBuilder()
@@ -194,34 +239,14 @@ export const command = {
                     return;
                 }
             } else {
-                // For existing setup, check if we're just updating specific settings
-                const changedOptions = interaction.options.data.filter(opt => opt.value !== null);
-     
-                if (changedOptions.length > 0) {
-                    // Single or multiple setting update
-                    settings = await manualSetup(interaction);
-                    if (existingSettings) {
-                        settings = {
-                            ...existingSettings,
-                            ...settings,
-                            setup_completed: true
-                        };
-                    }
-                    await interaction.reply({ 
-                        content: 'Updating configuration...', 
-                        ephemeral: true 
-                    });
-                } else {
-                    // No settings specified
-                    await interaction.reply({
-                        content: 'Please specify at least one setting to update. Example:\n' +
-                                '`/setup mod_role @role` - Set moderator role\n' +
-                                '`/setup content_filter_message Your message was filtered`\n' +
-                                '`/setup command_packs` - type "none" to disable all non-core packs',
-                        ephemeral: true
-                    });
-                    return;
-                }
+                await interaction.reply({
+                    content: 'Please specify at least one setting to update. Example:\n' +
+                            '`/setup mod_role @role` - Set moderator role\n' +
+                            '`/setup content_filter_message Your message was filtered`\n' +
+                            '`/setup command_packs` - type "none" to disable all non-core packs',
+                    ephemeral: true
+                });
+                return;
             }
      
             console.log('Updating server settings...');
@@ -237,7 +262,7 @@ export const command = {
      
             // Handle command packs setup
             const commandPacksOption = interaction.options.getString('command_packs');
-            if (commandPacksOption !== null) { // Only process if the option was provided
+            if (commandPacksOption !== null) {
                 console.log('Setting up command packs...');
                 await setupCommandPacks(interaction);
             }
@@ -263,7 +288,14 @@ export const command = {
             interaction.client.emit('reloadCommands');
      
             console.log('Setup completed successfully');
-            await logAction(interaction, 'SETUP', 'Bot configuration updated');
+    
+            // Check if we can access the log channel before logging
+            if (settings.log_channel_id) {
+                const logChannel = interaction.guild.channels.cache.get(settings.log_channel_id);
+                if (logChannel && logChannel.permissionsFor(interaction.client.user).has(['ViewChannel', 'SendMessages'])) {
+                    await logAction(interaction, 'SETUP', 'Bot configuration updated');
+                }
+            }
      
             const embed = await createSetupSummaryEmbed(interaction, settings);
             await interaction.editReply({ embeds: [embed] });
@@ -282,7 +314,7 @@ export const command = {
                 });
             }
         }
-     }
+    }
 };
 
 async function quickSetup(interaction) {
