@@ -202,9 +202,9 @@ export async function loadCommands(client) {
         console.error('Error registering commands:', error);
         throw error;
     }
- }
+}
 
- async function canUseCommand(interaction, command) {
+async function canUseCommand(interaction, command) {
     if (command.global) return true;
 
     // Check pack enabled status
@@ -320,30 +320,44 @@ export async function handleCommand(interaction) {
         // Handle cooldowns for non-admin guild commands
         if (!['owner', 'admin'].includes(command.permissionLevel)) {
             const settings = await db.getServerSettings(interaction.guildId);
-            const cooldownSeconds = settings?.cooldown_seconds || 
+            const baseCooldown = settings?.cooldown_seconds || 
                 DEFAULT_SETTINGS.cooldowns[interaction.commandName] || 
                 DEFAULT_SETTINGS.cooldowns.default;
 
-            const { onCooldown, timeLeft } = checkCooldown(
+            const { onCooldown, timeLeft, userCount } = checkCooldown(
                 interaction.guildId,
                 interaction.user.id,
                 interaction.commandName
             );
 
             if (onCooldown) {
+                let cooldownMessage = `Please wait ${timeLeft} seconds before using this command again.`;
+                if (userCount > 5) {
+                    cooldownMessage += `\nNote: Cooldown is increased due to high command usage (${userCount} users in the last 10 seconds).`;
+                }
+                
                 await interaction.reply({
-                    content: `Please wait ${timeLeft} seconds before using this command again.`,
+                    content: cooldownMessage,
                     ephemeral: true
                 });
                 return;
             }
 
-            addCooldown(
+            const dynamicDuration = addCooldown(
                 interaction.guildId,
                 interaction.user.id,
                 interaction.commandName,
-                cooldownSeconds
+                baseCooldown
             );
+
+            // Notify user if cooldown was increased
+            if (dynamicDuration > baseCooldown) {
+                await interaction.reply({
+                    content: `Due to high usage, this command's cooldown has been temporarily increased to ${dynamicDuration} seconds.`,
+                    ephemeral: true
+                });
+                return;
+            }
         }
 
         await command.execute(interaction);

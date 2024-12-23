@@ -4,6 +4,11 @@ import { initMistral } from '../services/mistralService.js';
 import { EmbedBuilder, ChannelType, REST, Routes } from 'discord.js';
 import { checkMessage } from '../utils/contentFilter.js';
 import db from '../database/index.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function initHandlers(client) {
    // Initialize services
@@ -244,20 +249,34 @@ export async function initHandlers(client) {
                     await interaction.respond(suggestions.slice(0, 25));
                 }
             }
-            else if (['block', 'editblock', 'removeblock'].includes(interaction.commandName)) {
+            else if (['block'].includes(interaction.commandName)) {
                 const focusedOption = interaction.options.getFocused(true);
                 
                 if (focusedOption.name === 'name' || focusedOption.name === 'title') {
                     try {
                         const search = focusedOption.value.toLowerCase();
-                        const blocks = await db.searchBlockTitles(interaction.guildId, search);
                         
-                        await interaction.respond(
-                            blocks.map(block => ({
-                                name: block.title,
-                                value: block.title
-                            }))
-                        );
+                        // Read blocks.json
+                        const blocksPath = path.join(__dirname, '..', 'commands', 'packs', 'trailmakers', 'data', 'blocks.json');
+                        const blocksData = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
+                        
+                        // Collect all block titles
+                        const blockTitles = [];
+                        blocksData.blocks.forEach(section => {
+                            section.categories.forEach(category => {
+                                category.blocks.forEach(block => {
+                                    if (block.title.toLowerCase().includes(search)) {
+                                        blockTitles.push({
+                                            name: block.title,
+                                            value: block.title
+                                        });
+                                    }
+                                });
+                            });
+                        });
+                        
+                        // Return up to 25 matches (Discord limit)
+                        await interaction.respond(blockTitles.slice(0, 25));
                     } catch (error) {
                         console.error('Error in block autocomplete:', error);
                         await interaction.respond([]);
@@ -269,16 +288,26 @@ export async function initHandlers(client) {
                         await interaction.respond([]);
                         return;
                     }
-     
+            
                     try {
-                        const categories = await db.searchCategories(
-                            interaction.guildId,
-                            section,
-                            focusedOption.value || ''
-                        );
-     
+                        // Read blocks.json
+                        const blocksPath = path.join(__dirname, '..', 'commands', 'packs', 'trailmakers', 'data', 'blocks.json');
+                        const blocksData = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
+                        
+                        // Find the specified section
+                        const sectionData = blocksData.blocks.find(s => s.section === section);
+                        if (!sectionData) {
+                            await interaction.respond([]);
+                            return;
+                        }
+            
+                        // Get categories from the section
+                        const categories = sectionData.categories
+                            .map(cat => cat.name)
+                            .filter(name => name.toLowerCase().includes(focusedOption.value.toLowerCase()));
+            
                         console.log('Found categories:', categories);
-     
+            
                         await interaction.respond(
                             categories.map(category => ({
                                 name: category,

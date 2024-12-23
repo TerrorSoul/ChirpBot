@@ -1,15 +1,23 @@
 // config/constants.js
 export const DEFAULT_SETTINGS = {
-    warning_threshold: 3,
+    warning_threshold: 4,
     warning_expire_days: 30,
     cooldowns: {
-        quote: 5,
-        wiki: 3,
-        createmod: 10,
-        warn: 5,
-        kick: 5,
-        ban: 5,
-        clear: 5,
+        createmod: 16,
+        explaincode: 16,
+        quote: 10,
+        botd: 10,
+        challenge: 10,
+        joke: 10,
+        randomvehicle: 10,
+        trailroast: 16,
+        block: 10,
+        gamestats: 10,
+        huelght: 10,
+        logic: 10,
+        moddiscord: 16,
+        news: 16,
+        template: 16
     }
 };
 

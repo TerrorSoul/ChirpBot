@@ -1,11 +1,19 @@
-// commands/packs/trailmakers/user/fun/guessblock.js
 import { ApplicationCommandType, ApplicationCommandOptionType } from 'discord.js';
-import db from '../../../../../database/index.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { getBlockInfo } from '../../../../../utils/blockManager.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const blocksPath = path.join(__dirname, '..', '..', 'data', 'blocks.json');
+
+// active games in memory
+const activeGames = new Map();
 
 function getHint(blockInfo, hintNumber) {
     switch(hintNumber) {
         case 0:
-            return `This block can be found in the "${blockInfo.section}" section.`;
+            return `This block can be found in the "${blockInfo.section.split(' - ')[0]}" section.`;
         case 1:
             if (blockInfo.weight) return `This block's weight is ${blockInfo.weight}.`;
             if (blockInfo.size) return `This block's size is ${blockInfo.size}.`;
@@ -38,7 +46,7 @@ export const command = {
     async execute(interaction) {
         const channelId = interaction.channelId;
         const input = interaction.options.getString('input')?.toLowerCase();
-        const game = await db.getActiveGame(channelId);
+        const game = activeGames.get(channelId);
 
         // No input - show game status
         if (!input) {
@@ -54,7 +62,7 @@ export const command = {
             });
         }
 
-        // Handle commands
+        // commands
         switch(input) {
             case 'start': {
                 if (game) {
@@ -64,11 +72,27 @@ export const command = {
                     });
                 }
 
-                const blocks = await db.searchBlockTitles(interaction.guildId, '');
-                const randomBlock = blocks[Math.floor(Math.random() * blocks.length)];
+                // Load blocks
+                const blocksData = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
+                const allBlocks = [];
                 
-                await db.startBlockGame(channelId, randomBlock.title);
-                const blockInfo = await db.getBlockInfo(interaction.guildId, randomBlock.title);
+                // Collect all block titles
+                blocksData.blocks.forEach(section => {
+                    section.categories.forEach(category => {
+                        category.blocks.forEach(block => {
+                            allBlocks.push(block.title);
+                        });
+                    });
+                });
+
+                const randomBlock = allBlocks[Math.floor(Math.random() * allBlocks.length)];
+                const blockInfo = getBlockInfo(randomBlock);
+                
+                activeGames.set(channelId, {
+                    block: randomBlock,
+                    hintsGiven: 1  // Start at 1 since we're giving the first hint at start
+                });
+
                 const firstHint = getHint(blockInfo, 0);
 
                 await interaction.reply({
@@ -85,18 +109,20 @@ export const command = {
                     });
                 }
 
-                const blockInfo = await db.getBlockInfo(interaction.guildId, game.block_title);
-                const hint = getHint(blockInfo, game.hints_given);
+                const blockInfo = getBlockInfo(game.block);
                 
-                if (game.hints_given >= 3) {
+                if (game.hintsGiven >= 4) {  // Increased to 4 since we start at 1
                     return interaction.reply({
                         content: 'You\'ve used all available hints! Make a guess or give up.'
                     });
                 }
 
-                await db.incrementHints(channelId);
+                const hint = getHint(blockInfo, game.hintsGiven);
+                game.hintsGiven++;
+                activeGames.set(channelId, game);
+                
                 await interaction.reply({
-                    content: `🤔 **Hint ${game.hints_given + 1}:** ${hint}`
+                    content: `🤔 **Hint ${game.hintsGiven}:** ${hint}`
                 });
                 break;
             }
@@ -109,9 +135,9 @@ export const command = {
                     });
                 }
 
-                await db.endGame(channelId);
+                activeGames.delete(channelId);
                 await interaction.reply({
-                    content: `Game Over! The block was: **${game.block_title}**\nStart a new game with \`/guessblock start\``
+                    content: `Game Over! The block was: **${game.block}**\nStart a new game with \`/guessblock start\``
                 });
                 break;
             }
@@ -125,10 +151,10 @@ export const command = {
                     });
                 }
 
-                if (input === game.block_title.toLowerCase()) {
-                    await db.endGame(channelId);
+                if (input === game.block.toLowerCase()) {
+                    activeGames.delete(channelId);
                     await interaction.reply({
-                        content: `🎉 Congratulations ${interaction.user}! You correctly guessed **${game.block_title}**!\n\nStart a new game with \`/guessblock start\``
+                        content: `🎉 Congratulations ${interaction.user}! You correctly guessed **${game.block}**!\n\nStart a new game with \`/guessblock start\``
                     });
                 } else {
                     await interaction.reply({

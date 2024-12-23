@@ -84,30 +84,94 @@ export const command = {
                 case 'list': {
                     const terms = await db.getFilteredTerms(interaction.guildId);
                     
-                    const embed = new EmbedBuilder()
-                        .setTitle('Filtered Terms')
-                        .setColor('#FF0000')
-                        .addFields(
-                            {
-                                name: 'Explicit Terms (Auto-Delete)',
-                                value: terms.explicit.length > 0 ? 
-                                    terms.explicit.map(t => `\`${t}\``).join(', ') : 
-                                    'None set',
-                                inline: false
-                            },
-                            {
-                                name: 'Suspicious Terms (Logged)',
-                                value: terms.suspicious.length > 0 ? 
-                                    terms.suspicious.map(t => `\`${t}\``).join(', ') : 
-                                    'None set',
-                                inline: false
+                    // Split terms into chunks that will fit within Discord's limits
+                    function chunkTerms(termsArray, maxLength = 1000) {
+                        const chunks = [];
+                        let currentChunk = [];
+                        let currentLength = 0;
+                        
+                        for (const term of termsArray) {
+                            const termString = `\`${term}\``;
+                            if (currentLength + termString.length + 2 > maxLength) { // +2 for the comma and space
+                                chunks.push(currentChunk);
+                                currentChunk = [termString];
+                                currentLength = termString.length;
+                            } else {
+                                currentChunk.push(termString);
+                                currentLength += termString.length + 2;
                             }
+                        }
+                        if (currentChunk.length > 0) {
+                            chunks.push(currentChunk);
+                        }
+                        return chunks;
+                    }
+                
+                    const explicitChunks = chunkTerms(terms.explicit);
+                    const suspiciousChunks = chunkTerms(terms.suspicious);
+                    
+                    // Create separate embeds for each chunk
+                    const embeds = [];
+                    
+                    // Add explicit terms embeds
+                    if (explicitChunks.length === 0) {
+                        embeds.push(new EmbedBuilder()
+                            .setColor('#FF0000')
+                            .setTitle('Explicit Terms (Auto-Delete)')
+                            .setDescription('None set'));
+                    } else {
+                        explicitChunks.forEach((chunk, index) => {
+                            embeds.push(new EmbedBuilder()
+                                .setColor('#FF0000')
+                                .setTitle(`Explicit Terms (Auto-Delete) ${index + 1}/${explicitChunks.length}`)
+                                .setDescription(chunk.join(', ')));
+                        });
+                    }
+                    
+                    // Add suspicious terms embeds
+                    if (suspiciousChunks.length === 0) {
+                        embeds.push(new EmbedBuilder()
+                            .setColor('#FFA500')
+                            .setTitle('Suspicious Terms (Logged)')
+                            .setDescription('None set'));
+                    } else {
+                        suspiciousChunks.forEach((chunk, index) => {
+                            embeds.push(new EmbedBuilder()
+                                .setColor('#FFA500')
+                                .setTitle(`Suspicious Terms (Logged) ${index + 1}/${suspiciousChunks.length}`)
+                                .setDescription(chunk.join(', ')));
+                        });
+                    }
+                
+                    // Add summary counts
+                    const summaryEmbed = new EmbedBuilder()
+                        .setColor('#00FF00')
+                        .setTitle('Filter Summary')
+                        .addFields(
+                            { name: 'Total Explicit Terms', value: terms.explicit.length.toString(), inline: true },
+                            { name: 'Total Suspicious Terms', value: terms.suspicious.length.toString(), inline: true }
                         );
-
+                    embeds.unshift(summaryEmbed);
+                
+                    // If there's only one embed (just the summary), add a note
+                    if (embeds.length === 1) {
+                        embeds[0].setDescription('No filtered terms configured.');
+                    }
+                
                     await interaction.reply({
-                        embeds: [embed],
+                        embeds: [embeds[0]],
                         ephemeral: true
                     });
+                
+                    // If there are multiple embeds, send them as follow-up messages
+                    if (embeds.length > 1) {
+                        for (let i = 1; i < embeds.length; i++) {
+                            await interaction.followUp({
+                                embeds: [embeds[i]],
+                                ephemeral: true
+                            });
+                        }
+                    }
                     break;
                 }
                 case 'import': {

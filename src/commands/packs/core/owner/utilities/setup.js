@@ -1,24 +1,18 @@
 // commands/packs/core/owner/management/setup.js
-import { ApplicationCommandOptionType, ChannelType, EmbedBuilder, REST, Routes } from 'discord.js';
+import { ApplicationCommandOptionType, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes } from 'discord.js';
 import db from '../../../../../database/index.js';
 import { logAction } from '../../../../../utils/logging.js';
 import { WELCOME_MESSAGES, FILTERED_TERMS } from '../../../../../config/constants.js';
 
 export const command = {
     name: 'setup',
-    description: 'Initial bot setup for server (server owner only)', 
+    description: 'Configure bot settings for server (server owner only)', 
     permissionLevel: 'owner',
     options: [
         {
-            name: 'quick',
-            type: ApplicationCommandOptionType.Boolean,
-            description: 'Use quick setup with default settings',
-            required: false
-        },
-        {
             name: 'command_packs',
             type: ApplicationCommandOptionType.String,
-            description: 'Select command packs to enable (comma-separated)',
+            description: 'Select command packs to enable (comma-separated), or type "none" to disable all',
             required: false,
             autocomplete: true
         },
@@ -33,7 +27,7 @@ export const command = {
         {
             name: 'warning_threshold',
             type: ApplicationCommandOptionType.Integer,
-            description: 'Number of warnings before auto-ban (default: 3)',
+            description: 'Number of warnings before auto-ban',
             required: false,
             min_value: 1,
             max_value: 10
@@ -41,7 +35,7 @@ export const command = {
         {
             name: 'warning_expire_days',
             type: ApplicationCommandOptionType.Integer,
-            description: 'Days until warnings expire (0 for never, default: 30)',
+            description: 'Days until warnings expire (0 for never)',
             required: false,
             min_value: 0,
             max_value: 365
@@ -88,7 +82,7 @@ export const command = {
         {
             name: 'spam_threshold',
             type: ApplicationCommandOptionType.Integer,
-            description: 'Number of messages before spam warning (default: 5)',
+            description: 'Number of messages before spam warning',
             required: false,
             min_value: 3,
             max_value: 10
@@ -96,7 +90,7 @@ export const command = {
         {
             name: 'spam_interval',
             type: ApplicationCommandOptionType.Integer,
-            description: 'Time window for spam detection in seconds (default: 5)',
+            description: 'Time window for spam detection in seconds',
             required: false,
             min_value: 3,
             max_value: 30
@@ -120,12 +114,20 @@ export const command = {
             required: false
         },
         {
+            name: 'content_filter_message',
+            type: ApplicationCommandOptionType.String,
+            description: 'Message to send when content is filtered',
+            required: false,
+            max_length: 1000
+        },
+        {
             name: 'content_filter_suspicious',
             type: ApplicationCommandOptionType.Boolean,
             description: 'Log suspicious messages for review',
             required: false
         }
     ],
+
     execute: async (interaction) => {
         if (interaction.guild.ownerId !== interaction.user.id) {
             return interaction.reply({
@@ -133,33 +135,112 @@ export const command = {
                 ephemeral: true
             });
         }
-
-        await interaction.deferReply({ ephemeral: true });
-
-        const useQuickSetup = interaction.options.getBoolean('quick') ?? true;
-
+     
+        const existingSettings = await db.getServerSettings(interaction.guildId);
+        const isFirstTimeSetup = !existingSettings?.setup_completed;
+     
         try {
             let settings;
-            
-            if (useQuickSetup) {
-                settings = await quickSetup(interaction);
+     
+            // For first-time setup, ask if they want quick setup
+            if (isFirstTimeSetup) {
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('quick_setup')
+                            .setLabel('Quick Setup')
+                            .setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder()
+                            .setCustomId('cancel_setup')
+                            .setLabel('Manual Setup')
+                            .setStyle(ButtonStyle.Secondary)
+                    );
+     
+                const confirmation = await interaction.reply({
+                    content: 'This appears to be your first time setting up the bot.\n\n' +
+                            'Would you like to use quick setup to automatically create channels and roles with default settings?\n\n' +
+                            'If you choose manual setup, use the command options to configure specific settings (e.g., `/setup mod_role @role log_channel #channel`)',
+                    components: [row],
+                    ephemeral: true
+                });
+     
+                try {
+                    const response = await confirmation.awaitMessageComponent({
+                        filter: i => i.user.id === interaction.user.id,
+                        time: 30000
+                    });
+     
+                    if (response.customId === 'quick_setup') {
+                        await response.update({
+                            content: 'Starting quick setup...',
+                            components: []
+                        });
+                        settings = await quickSetup(interaction);
+                        await db.resetServerForSetup(interaction.guildId);
+                    } else {
+                        await response.update({
+                            content: 'Quick setup cancelled. Use the command options to configure your settings manually:\n' +
+                                    'Example: `/setup mod_role @role log_channel #channel`\n' +
+                                    'You can configure one or multiple settings at once.',
+                            components: []
+                        });
+                        return;
+                    }
+                } catch (error) {
+                    await interaction.editReply({
+                        content: 'Setup cancelled (timed out).',
+                        components: []
+                    });
+                    return;
+                }
             } else {
-                settings = await manualSetup(interaction);
+                // For existing setup, check if we're just updating specific settings
+                const changedOptions = interaction.options.data.filter(opt => opt.value !== null);
+     
+                if (changedOptions.length > 0) {
+                    // Single or multiple setting update
+                    settings = await manualSetup(interaction);
+                    if (existingSettings) {
+                        settings = {
+                            ...existingSettings,
+                            ...settings,
+                            setup_completed: true
+                        };
+                    }
+                    await interaction.reply({ 
+                        content: 'Updating configuration...', 
+                        ephemeral: true 
+                    });
+                } else {
+                    // No settings specified
+                    await interaction.reply({
+                        content: 'Please specify at least one setting to update. Example:\n' +
+                                '`/setup mod_role @role` - Set moderator role\n' +
+                                '`/setup content_filter_message Your message was filtered`\n' +
+                                '`/setup command_packs` - type "none" to disable all non-core packs',
+                        ephemeral: true
+                    });
+                    return;
+                }
             }
-
-            console.log('Resetting server for setup...');
-            await db.resetServerForSetup(interaction.guildId);
-            
+     
             console.log('Updating server settings...');
             await db.updateServerSettings(interaction.guildId, settings);
-
+     
             if (settings.content_filter_enabled) {
-                console.log('Importing default filtered terms...');
-                await db.importDefaultTerms(interaction.guildId, FILTERED_TERMS, 'SYSTEM');
+                const terms = await db.getFilteredTerms(interaction.guildId);
+                if (!terms.explicit.length && !terms.suspicious.length) {
+                    console.log('Importing default filtered terms...');
+                    await db.importDefaultTerms(interaction.guildId, FILTERED_TERMS, 'SYSTEM');
+                }
             }
-            
-            console.log('Setting up command packs...');
-            await setupCommandPacks(interaction);
+     
+            // Handle command packs setup
+            const commandPacksOption = interaction.options.getString('command_packs');
+            if (commandPacksOption !== null) { // Only process if the option was provided
+                console.log('Setting up command packs...');
+                await setupCommandPacks(interaction);
+            }
             
             // Register guild commands
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -178,83 +259,31 @@ export const command = {
                 Routes.applicationGuildCommands(interaction.client.user.id, interaction.guildId),
                 { body: guildCommandsArray }
             );
-
+     
             interaction.client.emit('reloadCommands');
-
+     
             console.log('Setup completed successfully');
-            await logAction(interaction.guildId, 'SETUP', interaction.user.id, 'Bot configuration completed');
-
+            await logAction(interaction, 'SETUP', 'Bot configuration updated');
+     
             const embed = await createSetupSummaryEmbed(interaction, settings);
             await interaction.editReply({ embeds: [embed] });
-
+     
         } catch (error) {
             console.error('Setup error:', error);
-            await interaction.editReply({
-                content: 'An error occurred during setup. Please try again.',
-                ephemeral: true
-            });
-        }
-    }
-};
-
-async function setupCommandPacks(interaction) {
-    const selectedPacks = interaction.options.getString('command_packs')?.split(',') || [];
-   
-    console.log(`Setting up command packs for guild ${interaction.guildId}:`, selectedPacks);
-   
-    for (const packName of selectedPacks) {
-        const trimmedPackName = packName.trim();
-        if (trimmedPackName) {
-            try {
-                console.log(`Enabling pack ${trimmedPackName} for guild ${interaction.guildId}`);
-                const result = await db.enablePack(interaction.guildId, trimmedPackName);
-               
-                if (result) {
-                    console.log(`Successfully enabled pack ${trimmedPackName}`);
-                    try {
-                        // Import default quotes
-                        await db.importDefaultQuotes(interaction.guildId, trimmedPackName);
-                        console.log(`Imported default quotes for pack ${trimmedPackName}`);
-                       
-                        // Import default block info if it's the trailmakers pack
-                        if (trimmedPackName === 'trailmakers') {
-                            console.log('Detected trailmakers pack - starting blocks.json import process');
-                            try {
-                                await db.importBlocksData(interaction.guildId, trimmedPackName);
-                                console.log('Successfully completed blocks.json import for trailmakers pack');
-                            } catch (blockError) {
-                                console.error('Failed to import blocks.json:', blockError);
-                                console.error('Full blocks.json import error details:', {
-                                    name: blockError.name,
-                                    message: blockError.message,
-                                    stack: blockError.stack
-                                });
-                            }
-                        } else {
-                            console.log(`Pack ${trimmedPackName} is not trailmakers - skipping blocks.json import`);
-                        }
-                    } catch (error) {
-                        console.error(`Error importing data for pack ${trimmedPackName}:`, error);
-                        console.error('Full error details:', {
-                            name: error.name,
-                            message: error.message,
-                            stack: error.stack
-                        });
-                    }
-                } else {
-                    console.log(`Failed to enable pack ${trimmedPackName}`);
-                }
-            } catch (error) {
-                console.error(`Error enabling pack ${trimmedPackName}:`, error);
-                console.error('Full error details:', {
-                    name: error.name,
-                    message: error.message,
-                    stack: error.stack
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: 'An error occurred during setup. Please try again.',
+                    ephemeral: true
+                });
+            } else {
+                await interaction.editReply({
+                    content: 'An error occurred during setup. Please try again.',
+                    ephemeral: true
                 });
             }
         }
-    }
-}
+     }
+};
 
 async function quickSetup(interaction) {
     const cooldown = interaction.options.getInteger('cooldown') ?? 5;
@@ -263,7 +292,12 @@ async function quickSetup(interaction) {
     const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
     const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
     const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
-    const restrictChannels = interaction.options.getBoolean('restrict_channels') ?? true;
+    const restrictChannels = interaction.options.getBoolean('restrict_channels') ?? false;
+    const contentFilterEnabled = interaction.options.getBoolean('content_filter') ?? true;
+    const contentFilterNotify = interaction.options.getBoolean('content_filter_notify') ?? true;
+    const contentFilterMessage = interaction.options.getString('content_filter_message') ?? 
+        'Your message was removed because it contained inappropriate content.';
+    const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious') ?? true;
     
     // If no specific packs were chosen, get all available non-core packs
     if (!interaction.options.getString('command_packs')) {
@@ -304,7 +338,6 @@ async function quickSetup(interaction) {
             }
         ]
     });
-    
     const reportsChannel = await interaction.guild.channels.create({
         name: 'reports',
         type: ChannelType.GuildText,
@@ -358,87 +391,134 @@ async function quickSetup(interaction) {
         spam_interval: spamInterval * 1000,
         spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.',
         channel_restrictions_enabled: restrictChannels,
-        content_filter_enabled: interaction.options.getBoolean('content_filter') ?? true,
-        content_filter_notify_user: interaction.options.getBoolean('content_filter_notify') ?? true,
-        content_filter_log_suspicious: interaction.options.getBoolean('content_filter_suspicious') ?? true,
-        content_filter_notify_message: 'Your message was removed because it contained inappropriate content.'
+        content_filter_enabled: contentFilterEnabled,
+        content_filter_notify_user: contentFilterNotify,
+        content_filter_log_suspicious: contentFilterSuspicious,
+        content_filter_notify_message: contentFilterMessage
     };
 }
 
 async function manualSetup(interaction) {
+    const cooldown = interaction.options.getInteger('cooldown');
+    const warningThreshold = interaction.options.getInteger('warning_threshold');
+    const warningExpireDays = interaction.options.getInteger('warning_expire_days');
     const modRole = interaction.options.getRole('mod_role');
     const logChannel = interaction.options.getChannel('log_channel');
     const reportsChannel = interaction.options.getChannel('reports_channel');
     const welcomeChannel = interaction.options.getChannel('welcome_channel');
-    const welcomeEnabled = interaction.options.getBoolean('welcome_enabled') ?? true;
-    const cooldown = interaction.options.getInteger('cooldown') ?? 5;
-    const warningThreshold = interaction.options.getInteger('warning_threshold') ?? 3;
-    const warningExpireDays = interaction.options.getInteger('warning_expire_days') ?? 30;
-    const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
-    const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
-    const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
-    const restrictChannels = interaction.options.getBoolean('restrict_channels') ?? false;
+    const welcomeEnabled = interaction.options.getBoolean('welcome_enabled');
+    const spamProtection = interaction.options.getBoolean('spam_protection');
+    const spamThreshold = interaction.options.getInteger('spam_threshold');
+    const spamInterval = interaction.options.getInteger('spam_interval');
+    const restrictChannels = interaction.options.getBoolean('restrict_channels');
+    const contentFilterEnabled = interaction.options.getBoolean('content_filter');
+    const contentFilterNotify = interaction.options.getBoolean('content_filter_notify');
+    const contentFilterMessage = interaction.options.getString('content_filter_message');
+    const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious');
+    const settings = {};
 
-    if (!modRole || !logChannel || !reportsChannel) {
-        throw new Error('Moderator role, log channel, and reports channel are required for manual setup');
+    // Only include values that were actually provided
+    if (cooldown !== null) settings.cooldown_seconds = cooldown;
+    if (warningThreshold !== null) settings.warning_threshold = warningThreshold;
+    if (warningExpireDays !== null) settings.warning_expire_days = warningExpireDays;
+    if (modRole) settings.mod_role_id = modRole.id;
+    if (logChannel) settings.log_channel_id = logChannel.id;
+    if (reportsChannel) settings.reports_channel_id = reportsChannel.id;
+    if (welcomeChannel) settings.welcome_channel_id = welcomeChannel.id;
+    if (welcomeEnabled !== null) settings.welcome_enabled = welcomeEnabled;
+    if (spamProtection !== null) settings.spam_protection = spamProtection;
+    if (spamThreshold !== null) settings.spam_threshold = spamThreshold;
+    if (spamInterval !== null) settings.spam_interval = spamInterval * 1000;
+    if (restrictChannels !== null) settings.channel_restrictions_enabled = restrictChannels;
+    if (contentFilterEnabled !== null) settings.content_filter_enabled = contentFilterEnabled;
+    if (contentFilterNotify !== null) settings.content_filter_notify_user = contentFilterNotify;
+    if (contentFilterMessage !== null) settings.content_filter_notify_message = contentFilterMessage;
+    if (contentFilterSuspicious !== null) settings.content_filter_log_suspicious = contentFilterSuspicious;
+
+    // Set welcome messages if enabling welcome messages for the first time
+    if (welcomeEnabled && !settings.welcome_messages) {
+        settings.welcome_messages = JSON.stringify(WELCOME_MESSAGES);
     }
 
-    return {
-        guild_id: interaction.guildId,
-        setup_completed: true,
-        mod_role_id: modRole.id,
-        log_channel_id: logChannel.id,
-        reports_channel_id: reportsChannel.id,
-        welcome_channel_id: welcomeChannel?.id || null,
-        warning_threshold: warningThreshold,
-        warning_expire_days: warningExpireDays,
-        cooldown_seconds: cooldown,
-        welcome_enabled: welcomeEnabled,
-        welcome_messages: JSON.stringify(WELCOME_MESSAGES),
-        disabled_commands: '',
-        spam_protection: spamProtection,
-        spam_threshold: spamThreshold,
-        spam_interval: spamInterval * 1000,
-        spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.',
-        channel_restrictions_enabled: restrictChannels,
-        content_filter_enabled: interaction.options.getBoolean('content_filter') ?? true,
-        content_filter_notify_user: interaction.options.getBoolean('content_filter_notify') ?? true,
-        content_filter_log_suspicious: interaction.options.getBoolean('content_filter_suspicious') ?? true,
-        content_filter_notify_message: 'Your message was removed because it contained inappropriate content.'
-    };
+    return settings;
+}
+
+async function setupCommandPacks(interaction) {
+    const selectedPacks = interaction.options.getString('command_packs');
+   
+    console.log(`Setting up command packs for guild ${interaction.guildId}`);
+   
+    if (selectedPacks === null) {
+        // If command_packs wasn't specified, don't change anything
+        return;
+    }
+
+    try {
+        // First, disable all existing non-core packs
+        const allPacks = await db.getAllPacks();
+        for (const pack of allPacks) {
+            if (!pack.is_core) {
+                await db.disablePack(interaction.guildId, pack.name);
+            }
+        }
+
+        // If "none" was provided or empty string, we're done (all non-core packs are now disabled)
+        if (selectedPacks.toLowerCase() === 'none' || !selectedPacks.trim()) {
+            console.log('Disabling all non-core packs');
+            return;
+        }
+
+        // Otherwise, enable the specified packs
+        const packNames = selectedPacks.split(',').filter(name => name.trim());
+        for (const packName of packNames) {
+            try {
+                console.log(`Enabling pack ${packName} for guild ${interaction.guildId}`);
+                const result = await db.enablePack(interaction.guildId, packName.trim());
+               
+                if (result) {
+                    console.log(`Successfully enabled pack ${packName}`);
+                }
+            } catch (error) {
+                console.error(`Error enabling pack ${packName}:`, error);
+            }
+        }
+    } catch (error) {
+        console.error('Error in setupCommandPacks:', error);
+    }
 }
 
 async function createSetupSummaryEmbed(interaction, settings) {
     const enabledPacks = await db.getEnabledPacks(interaction.guildId);
 
     const embed = new EmbedBuilder()
-        .setTitle('🔧 Bot Setup Complete')
+        .setTitle('🔧 Bot Configuration Updated')
         .setColor('#00FF00')
         .addFields(
             { 
                 name: 'Roles',
-                value: `Moderator: <@&${settings.mod_role_id}>`,
+                value: settings.mod_role_id ? 
+                    `Moderator: <@&${settings.mod_role_id}>` : 
+                    'No moderator role configured',
                 inline: true
             },
             {
                 name: 'Channels',
-                value: `Logs: <#${settings.log_channel_id}>
-Reports: <#${settings.reports_channel_id}>${
-                    settings.welcome_channel_id ? `\nWelcome: <#${settings.welcome_channel_id}>` : ''
-                }`.trim(),
+                value: `${settings.log_channel_id ? `Logs: <#${settings.log_channel_id}>` : 'No log channel set'}
+${settings.reports_channel_id ? `Reports: <#${settings.reports_channel_id}>` : 'No reports channel set'}
+${settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : 'No welcome channel set'}`.trim(),
                 inline: true
             },
             {
                 name: 'Features',
                 value: `Welcome Messages: ${settings.welcome_enabled ? 'Enabled' : 'Disabled'}
-             Spam Protection: ${settings.spam_protection ? 'Enabled' : 'Disabled'}
-             Command Cooldown: ${settings.cooldown_seconds}s
-             Channel Restrictions: ${settings.channel_restrictions_enabled ? 'Enabled' : 'Disabled'}
-             Content Filter: ${settings.content_filter_enabled ? 'Enabled' : 'Disabled'}
-             Filter Notifications: ${settings.content_filter_notify_user ? 'Enabled' : 'Disabled'}
-             Log Suspicious: ${settings.content_filter_log_suspicious ? 'Enabled' : 'Disabled'}`,
+Spam Protection: ${settings.spam_protection ? 'Enabled' : 'Disabled'}
+Command Cooldown: ${settings.cooldown_seconds}s
+Channel Restrictions: ${settings.channel_restrictions_enabled ? 'Enabled' : 'Disabled'}
+Content Filter: ${settings.content_filter_enabled ? 'Enabled' : 'Disabled'}
+Filter Notifications: ${settings.content_filter_notify_user ? 'Enabled' : 'Disabled'}
+Log Suspicious: ${settings.content_filter_log_suspicious ? 'Enabled' : 'Disabled'}`,
                 inline: true
-             },
+            },
             {
                 name: 'Warning Settings',
                 value: `Warning Threshold: ${settings.warning_threshold} warnings before ban
@@ -453,6 +533,14 @@ Warning Expiry: ${settings.warning_expire_days > 0 ? `${settings.warning_expire_
             value: `Threshold: ${settings.spam_threshold} messages
 Interval: ${settings.spam_interval / 1000}s
 Warning Threshold: ${settings.warning_threshold} warnings`,
+            inline: false
+        });
+    }
+
+    if (settings.content_filter_enabled && settings.content_filter_notify_user) {
+        embed.addFields({
+            name: 'Content Filter Notification',
+            value: settings.content_filter_notify_message || 'Default message',
             inline: false
         });
     }
@@ -473,6 +561,12 @@ Warning Threshold: ${settings.warning_threshold} warnings`,
             value: packsDisplay,
             inline: false
         });
+    } else {
+        embed.addFields({
+            name: 'Enabled Command Packs',
+            value: 'Only core pack enabled',
+            inline: false
+        });
     }
 
     if (settings.channel_restrictions_enabled) {
@@ -483,6 +577,11 @@ Warning Threshold: ${settings.warning_threshold} warnings`,
         });
     }
 
-    embed.setFooter({ text: 'Use /help to see your available commands' });
+    embed.addFields({
+        name: 'Additional Configuration',
+        value: 'Use `/help` to see available commands\nUse `/reset` to completely reset bot configuration',
+        inline: false
+    });
+
     return embed;
 }

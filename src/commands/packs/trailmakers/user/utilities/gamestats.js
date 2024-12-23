@@ -3,7 +3,7 @@ import { ApplicationCommandType, EmbedBuilder } from 'discord.js';
 import { fetch } from 'undici';
 
 export const command = {
-    name: 'game-stats',
+    name: 'gamestats',
     description: 'Show current Trailmakers player count on Steam',
     permissionLevel: 'user',
     type: ApplicationCommandType.ChatInput,

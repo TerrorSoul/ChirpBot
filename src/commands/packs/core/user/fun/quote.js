@@ -1,7 +1,7 @@
 // commands/packs/core/user/fun/quote.js
 import { ApplicationCommandType, ApplicationCommandOptionType } from 'discord.js';
 import { createQuoteEmbed } from '../../../../../utils/embeds.js';
-import db from '../../../../../database/index.js';
+import { getQuoteById, getRandomQuote } from '../../../../../utils/quotesManager.js';
 
 const lastQuotesByUser = new Map();
 
@@ -24,7 +24,7 @@ export const command = {
         let quote;
 
         if (requestedId) {
-            quote = await db.getQuoteById(interaction.guildId, requestedId);
+            quote = getQuoteById(requestedId);
             if (!quote) {
                 return interaction.reply({
                     content: `Quote #${requestedId} not found.`,
@@ -33,11 +33,11 @@ export const command = {
             }
         } else {
             let lastQuotes = lastQuotesByUser.get(interaction.user.id) || [];
-            quote = await db.getRandomQuote(interaction.guildId, lastQuotes);
+            quote = getRandomQuote(lastQuotes);
 
             if (!quote) {
                 return interaction.reply({
-                    content: 'No quotes found in this server.',
+                    content: 'No quotes found.',
                     ephemeral: true
                 });
             }
@@ -48,7 +48,6 @@ export const command = {
         }
 
         const embed = createQuoteEmbed(quote);
-        embed.setFooter({ text: `Requested by ${interaction.user.tag}` });
 
         await interaction.reply({ embeds: [embed] });
     }

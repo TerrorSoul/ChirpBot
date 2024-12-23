@@ -1,6 +1,7 @@
+// commands/packs/trailmakers/user/utilities/block.js
 import { ApplicationCommandType, ApplicationCommandOptionType } from 'discord.js';
 import { createBlockEmbed } from '../../../../../utils/embeds.js';
-import db from '../../../../../database/index.js';
+import { getBlockInfo } from '../../../../../utils/blockManager.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -23,7 +24,7 @@ export const command = {
     async execute(interaction) {
         const blockName = interaction.options.getString('name');
         
-        const blockInfo = await db.getBlockInfo(interaction.guildId, blockName);
+        const blockInfo = getBlockInfo(blockName);
         
         if (!blockInfo) {
             return interaction.reply({
@@ -36,7 +37,7 @@ export const command = {
 
         // Handle image attachment if present
         if (blockInfo.image) {
-            const imagePath = path.join(__dirname, '..', '..', 'images', blockInfo.image);
+            const imagePath = path.join(__dirname, '..', '..', 'data', 'images', blockInfo.image);
             
             if (fs.existsSync(imagePath)) {
                 return interaction.reply({
@@ -49,7 +50,6 @@ export const command = {
             }
         }
 
-        // If no image or image file not found, send without image
         await interaction.reply({ embeds: [embed] });
     }
 };

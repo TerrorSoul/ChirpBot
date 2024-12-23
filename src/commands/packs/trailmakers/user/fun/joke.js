@@ -1,11 +1,10 @@
-// commands/packs/trailmakers/user/fun/joke.js
 import { ApplicationCommandType } from 'discord.js';
 import fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const jokesPath = join(__dirname, '../../../../../config/jokes.json');
+const jokesPath = join(__dirname, '..', '..', '..', 'trailmakers', 'data', 'jokes.json');
 
 export const command = {
     name: 'joke',

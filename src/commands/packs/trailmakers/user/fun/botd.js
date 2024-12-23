@@ -1,11 +1,12 @@
-// commands/packs/trailmakers/user/fun/botd.js
 import { ApplicationCommandType, EmbedBuilder } from 'discord.js';
-import db from '../../../../../database/index.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { getBlockInfo } from '../../../../../utils/blockManager.js';
+import db from '../../../../../database/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const blocksPath = path.join(__dirname, '..', '..', 'data', 'blocks.json');
 
 export const command = {
     name: 'botd',
@@ -14,20 +15,31 @@ export const command = {
     type: ApplicationCommandType.ChatInput,
     execute: async (interaction) => {
         try {
-            // Check if we already have a BOTD for today
+            // Check if we already have a BOTD for today in the database
             let botd = await db.getCurrentBOTD();
+            let blockInfo;
 
             if (!botd) {
-                // Get list of recently used blocks
+                // Load all blocks from JSON
+                const blocksData = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
+                const allBlocks = [];
+                
+                // Collect all block titles
+                blocksData.blocks.forEach(section => {
+                    section.categories.forEach(category => {
+                        category.blocks.forEach(block => {
+                            allBlocks.push(block.title);
+                        });
+                    });
+                });
+
+                // Get list of recently used blocks from database
                 const recentBlocks = await db.getRecentBOTDs();
                 const recentBlockTitles = recentBlocks.map(b => b.block_title);
 
-                // Get all blocks by searching with empty string
-                const allBlocks = await db.searchBlockTitles(interaction.guildId, '');
-
                 // Filter out recently used blocks
                 const availableBlocks = allBlocks.filter(
-                    block => !recentBlockTitles.includes(block.title)
+                    block => !recentBlockTitles.includes(block)
                 );
 
                 if (availableBlocks.length === 0) {
@@ -42,32 +54,32 @@ export const command = {
                     Math.floor(Math.random() * availableBlocks.length)
                 ];
 
-                // Set as block of the day
-                await db.setBlockOfTheDay(randomBlock.title);
+                // Set as block of the day in database for persistence
+                await db.setBlockOfTheDay(randomBlock);
                 
-                // Get full block info
-                botd = await db.getBlockInfo(interaction.guildId, randomBlock.title);
+                // Get block info from JSON
+                blockInfo = getBlockInfo(randomBlock);
             } else {
-                // Get full block info for today's BOTD
-                botd = await db.getBlockInfo(interaction.guildId, botd.block_title);
+                // Get block info for today's BOTD from JSON
+                blockInfo = getBlockInfo(botd.block_title);
             }
 
             const embed = new EmbedBuilder()
-                .setTitle(`🎯 Block of the Day: ${botd.title}`)
-                .setDescription(botd.caption || 'No description available')
+                .setTitle(`🎯 Block of the Day: ${blockInfo.title}`)
+                .setDescription(blockInfo.caption || 'No description available')
                 .setColor('#FFD700');
 
             // Handle image attachment if present
-            if (botd.image) {
-                const imagePath = path.join(__dirname, '..', '..', 'images', botd.image);
+            if (blockInfo.image) {
+                const imagePath = path.join(__dirname, '..', '..', 'data', 'images', blockInfo.image);
                 
                 if (fs.existsSync(imagePath)) {
-                    embed.setImage(`attachment://${botd.image}`);
+                    embed.setImage(`attachment://${blockInfo.image}`);
                     return interaction.reply({
                         embeds: [embed],
                         files: [{
                             attachment: imagePath,
-                            name: botd.image
+                            name: blockInfo.image
                         }]
                     });
                 }

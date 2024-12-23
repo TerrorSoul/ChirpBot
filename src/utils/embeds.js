@@ -2,15 +2,24 @@
 import { EmbedBuilder } from 'discord.js';
 
 export function createQuoteEmbed(quote) {
-    return new EmbedBuilder()
-        .setColor('#FFD700')
-        .setTitle('📜 Trailmakers Quote')
-        .setDescription(`*"${quote.text}"*`)
+    const embed = new EmbedBuilder()
+        .setColor('#0099ff')
+        .setTitle(`Quote #${quote.id}`)
+        .setDescription(quote.text)
         .addFields(
-            { name: 'ID', value: `#${quote.id}`, inline: true },
-            { name: 'Author', value: quote.author, inline: true },
-            { name: 'Date', value: quote.quote_date, inline: true }
+            { 
+                name: 'Author', 
+                value: quote.author || 'Unknown', 
+                inline: true 
+            },
+            { 
+                name: 'Date', 
+                value: quote.date || 'Unknown', 
+                inline: true 
+            }
         );
+
+    return embed;
 }
 
 export function createHelpEmbed(commands) {
