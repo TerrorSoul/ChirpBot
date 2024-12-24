@@ -15,29 +15,25 @@ export const command = {
     type: ApplicationCommandType.ChatInput,
     execute: async (interaction) => {
         try {
-            // Check if we already have a BOTD for today in the database
             let botd = await db.getCurrentBOTD();
             let blockInfo;
 
             if (!botd) {
-                // Load all blocks from JSON
                 const blocksData = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
                 const allBlocks = [];
                 
-                // Collect all block titles
                 blocksData.blocks.forEach(section => {
                     section.categories.forEach(category => {
                         category.blocks.forEach(block => {
-                            allBlocks.push(block.title);
+                            if (block.title && block.title.trim() !== '') {
+                                allBlocks.push(block.title);
+                            }
                         });
                     });
                 });
 
-                // Get list of recently used blocks from database
                 const recentBlocks = await db.getRecentBOTDs();
                 const recentBlockTitles = recentBlocks.map(b => b.block_title);
-
-                // Filter out recently used blocks
                 const availableBlocks = allBlocks.filter(
                     block => !recentBlockTitles.includes(block)
                 );
@@ -49,38 +45,57 @@ export const command = {
                     });
                 }
 
-                // Select random block from available blocks
                 const randomBlock = availableBlocks[
                     Math.floor(Math.random() * availableBlocks.length)
                 ];
 
-                // Set as block of the day in database for persistence
                 await db.setBlockOfTheDay(randomBlock);
-                
-                // Get block info from JSON
                 blockInfo = getBlockInfo(randomBlock);
             } else {
-                // Get block info for today's BOTD from JSON
                 blockInfo = getBlockInfo(botd.block_title);
             }
 
             const embed = new EmbedBuilder()
                 .setTitle(`🎯 Block of the Day: ${blockInfo.title}`)
-                .setDescription(blockInfo.caption || 'No description available')
                 .setColor('#FFD700');
 
-            // Handle image attachment if present
+            // Add description/caption if available
+            if (blockInfo.caption) {
+                embed.setDescription(blockInfo.caption);
+            }
+
+            // Build stats field content
+            //let stats = [];
+            //if (blockInfo.weight) stats.push(`**Weight:** ${blockInfo.weight}`);
+            //if (blockInfo.size) stats.push(`**Size:** ${blockInfo.size}`);
+            //if (blockInfo.hp) stats.push(`**HP:** ${blockInfo.hp}`);
+            //if (blockInfo.aero) stats.push(`**Aerodynamics:** ${blockInfo.aero}`);
+
+            // Only add stats field if there are stats to show
+            //if (stats.length > 0) {
+            //    embed.addFields({ name: 'Stats', value: stats.join('\n') });
+            //}
+
+            // section info
+           // if (blockInfo.section) {
+           //     embed.setFooter({ text: `Section: ${blockInfo.section}` });
+           // }
+
+            // Handle image attachment
             if (blockInfo.image) {
                 const imagePath = path.join(__dirname, '..', '..', 'data', 'images', blockInfo.image);
                 
                 if (fs.existsSync(imagePath)) {
-                    embed.setImage(`attachment://${blockInfo.image}`);
+                    const attachment = {
+                        attachment: imagePath,
+                        name: 'block.png' 
+                    };
+                    
+                    embed.setImage('attachment://block.png');
+
                     return interaction.reply({
                         embeds: [embed],
-                        files: [{
-                            attachment: imagePath,
-                            name: blockInfo.image
-                        }]
+                        files: [attachment]
                     });
                 }
             }

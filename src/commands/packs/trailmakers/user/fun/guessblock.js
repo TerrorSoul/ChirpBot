@@ -7,23 +7,26 @@ import { getBlockInfo } from '../../../../../utils/blockManager.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const blocksPath = path.join(__dirname, '..', '..', 'data', 'blocks.json');
 
-// active games in memory
+// Active games stored in memory
 const activeGames = new Map();
 
 function getHint(blockInfo, hintNumber) {
     switch(hintNumber) {
         case 0:
-            return `This block can be found in the "${blockInfo.section.split(' - ')[0]}" section.`;
+            return `This block can be found in the "${blockInfo.section}" section.`;
         case 1:
-            if (blockInfo.weight) return `This block's weight is ${blockInfo.weight}.`;
             if (blockInfo.size) return `This block's size is ${blockInfo.size}.`;
-            return 'No specific weight or size information available.';
+            return 'No specific size information available.';
         case 2:
-            if (blockInfo.hp) return `This block has ${blockInfo.hp} HP.`;
-            return blockInfo.caption || 'No additional information available.';
+            if (blockInfo.weight) return `This block weighs ${blockInfo.weight}.`;
+            return 'No weight information available.';
         case 3:
+            if (blockInfo.hp) return `This block has ${blockInfo.hp} HP.`;
+            return 'No HP information available.';
+        case 4:
             if (blockInfo.aero) return `Aerodynamics: ${blockInfo.aero}`;
-            return 'No aerodynamic properties to reveal.';
+            if (blockInfo.caption) return blockInfo.caption;
+            return 'No additional information available.';
         default:
             return 'No more hints available!';
     }
@@ -62,7 +65,7 @@ export const command = {
             });
         }
 
-        // commands
+        // Handle commands
         switch(input) {
             case 'start': {
                 if (game) {
@@ -80,23 +83,39 @@ export const command = {
                 blocksData.blocks.forEach(section => {
                     section.categories.forEach(category => {
                         category.blocks.forEach(block => {
-                            allBlocks.push(block.title);
+                            if (block.title && block.title.trim() !== '') {
+                                allBlocks.push(block.title);
+                            }
                         });
                     });
                 });
 
+                if (allBlocks.length === 0) {
+                    return interaction.reply({
+                        content: 'Error: No blocks available in the database.',
+                        ephemeral: true
+                    });
+                }
+
                 const randomBlock = allBlocks[Math.floor(Math.random() * allBlocks.length)];
                 const blockInfo = getBlockInfo(randomBlock);
                 
+                if (!blockInfo) {
+                    return interaction.reply({
+                        content: 'Error: Failed to get block information.',
+                        ephemeral: true
+                    });
+                }
+
                 activeGames.set(channelId, {
                     block: randomBlock,
-                    hintsGiven: 1  // Start at 1 since we're giving the first hint at start
+                    hintsGiven: 1
                 });
 
                 const firstHint = getHint(blockInfo, 0);
 
                 await interaction.reply({
-                    content: `🎮 **New Guess the Block Game Started!**\n\nFirst hint: ${firstHint}\n\nJust type \`/guessblock [your guess]\` to guess!`
+                    content: `🎮 **New Guess the Block Game Started!**\n\nFirst hint: ${firstHint}\n\nMake a guess with \`/guessblock [your guess]\` or get another hint with \`/guessblock hint\`!`
                 });
                 break;
             }
@@ -111,9 +130,9 @@ export const command = {
 
                 const blockInfo = getBlockInfo(game.block);
                 
-                if (game.hintsGiven >= 4) {  // Increased to 4 since we start at 1
+                if (game.hintsGiven >= 5) {
                     return interaction.reply({
-                        content: 'You\'ve used all available hints! Make a guess or give up.'
+                        content: 'You\'ve used all available hints! Make a guess or give up with `/guessblock giveup`'
                     });
                 }
 
@@ -122,7 +141,7 @@ export const command = {
                 activeGames.set(channelId, game);
                 
                 await interaction.reply({
-                    content: `🤔 **Hint ${game.hintsGiven}:** ${hint}`
+                    content: `🤔 **Hint ${game.hintsGiven}/5:** ${hint}`
                 });
                 break;
             }
@@ -135,9 +154,29 @@ export const command = {
                     });
                 }
 
+                const blockInfo = getBlockInfo(game.block);
                 activeGames.delete(channelId);
+
+                let revealMessage = `Game Over! The block was: **${game.block}**\n`;
+                if (blockInfo.caption) {
+                    revealMessage += `\n${blockInfo.caption}`;
+                }
+                
+                if (blockInfo.image) {
+                    const imagePath = path.join(__dirname, '..', '..', 'data', 'images', blockInfo.image);
+                    if (fs.existsSync(imagePath)) {
+                        return interaction.reply({
+                            content: revealMessage + '\n\nStart a new game with `/guessblock start`',
+                            files: [{
+                                attachment: imagePath,
+                                name: blockInfo.image
+                            }]
+                        });
+                    }
+                }
+
                 await interaction.reply({
-                    content: `Game Over! The block was: **${game.block}**\nStart a new game with \`/guessblock start\``
+                    content: revealMessage + '\n\nStart a new game with `/guessblock start`'
                 });
                 break;
             }
@@ -152,9 +191,29 @@ export const command = {
                 }
 
                 if (input === game.block.toLowerCase()) {
+                    const blockInfo = getBlockInfo(game.block);
                     activeGames.delete(channelId);
+
+                    let winMessage = `🎉 Congratulations ${interaction.user}! You correctly guessed **${game.block}**!`;
+                    if (blockInfo.caption) {
+                        winMessage += `\n\n${blockInfo.caption}`;
+                    }
+
+                    if (blockInfo.image) {
+                        const imagePath = path.join(__dirname, '..', '..', 'data', 'images', blockInfo.image);
+                        if (fs.existsSync(imagePath)) {
+                            return interaction.reply({
+                                content: winMessage + '\n\nStart a new game with `/guessblock start`',
+                                files: [{
+                                    attachment: imagePath,
+                                    name: blockInfo.image
+                                }]
+                            });
+                        }
+                    }
+
                     await interaction.reply({
-                        content: `🎉 Congratulations ${interaction.user}! You correctly guessed **${game.block}**!\n\nStart a new game with \`/guessblock start\``
+                        content: winMessage + '\n\nStart a new game with `/guessblock start`'
                     });
                 } else {
                     await interaction.reply({

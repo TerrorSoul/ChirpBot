@@ -44,7 +44,7 @@ export const command = {
                     embeds: [embed],
                     files: [{
                         attachment: imagePath,
-                        name: blockInfo.image
+                        name: 'block.png'
                     }]
                 });
             }

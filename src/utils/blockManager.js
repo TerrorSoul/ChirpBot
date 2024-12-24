@@ -26,7 +26,6 @@ export function getBlockInfo(blockName) {
     if (!data?.blocks) return null;
 
     for (const section of data.blocks) {
-        if (!section.categories) continue;
         for (const category of section.categories) {
             const block = category.blocks?.find(b => 
                 b.title.toLowerCase() === blockName.toLowerCase()
@@ -34,7 +33,7 @@ export function getBlockInfo(blockName) {
             if (block) {
                 return {
                     ...block,
-                    section: `${section.section} - ${category.name}`
+                    section: section.section
                 };
             }
         }
@@ -48,7 +47,6 @@ export function searchBlockTitles(search) {
 
     const matches = [];
     for (const section of data.blocks) {
-        if (!section.categories) continue;
         for (const category of section.categories) {
             const blockMatches = category.blocks?.filter(block =>
                 block.title.toLowerCase().includes(search.toLowerCase())
@@ -69,6 +67,19 @@ export function getBlockSections() {
     return data.blocks.map(section => ({
         section: section.section
     }));
+}
+
+export function getAllBlocks() {
+    const data = loadBlocksData();
+    if (!data?.blocks) return [];
+
+    const allBlocks = [];
+    for (const section of data.blocks) {
+        for (const category of section.categories) {
+            allBlocks.push(...(category.blocks || []));
+        }
+    }
+    return allBlocks;
 }
 
 // Clear cache to force reload of blocks.json

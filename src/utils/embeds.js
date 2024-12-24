@@ -113,11 +113,8 @@ export function createBlockEmbed(blockInfo) {
     const embed = new EmbedBuilder()
         .setColor('#1b2838')
         .setTitle(`🔧 ${blockInfo.title}`)
-        .setDescription(blockInfo.caption || 'No description available');
-
-    if (blockInfo.image) {
-        embed.setImage(`attachment://${blockInfo.image}`);
-    }
+        .setDescription(blockInfo.caption || 'No description available')
+        .setThumbnail('attachment://block.png');
 
     // Clean grouping of specifications
     const specs = [];
