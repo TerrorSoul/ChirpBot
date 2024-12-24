@@ -162,7 +162,7 @@ export const FILTERED_TERMS = {
         "fucking", "fucked", "fucker", "fuckers", "molest", "raped", "raping", 
         "rape", "sexual harassment", "porn", "porno", "prostitute", "bros before hoes", 
         "pimp", "stripper", "strip club", "hooker", "jack off", "jerk off", "beating off", 
-        "chokin' the chicken", "spank the monkey"
+        "chokin' the chicken", "spank the monkey", "tits", "prick", "cum"
     ],
     suspicious: [
         "racist", "bigoted", "violent", 

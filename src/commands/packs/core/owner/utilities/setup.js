@@ -1,4 +1,4 @@
-// commands/packs/core/owner/management/setup.js
+// commands/packs/core/owner/utilities/setup.js
 import { ApplicationCommandOptionType, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes } from 'discord.js';
 import db from '../../../../../database/index.js';
 import { logAction } from '../../../../../utils/logging.js';

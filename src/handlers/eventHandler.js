@@ -3,6 +3,7 @@ import { loadCommands, handleCommand } from './commandHandler.js';
 import { initMistral } from '../services/mistralService.js';
 import { EmbedBuilder, ChannelType, REST, Routes } from 'discord.js';
 import { checkMessage } from '../utils/contentFilter.js';
+import { initializeDomainLists } from '../utils/filterCache.js';
 import db from '../database/index.js';
 import path from 'path';
 import fs from 'fs';
@@ -16,15 +17,16 @@ export async function initHandlers(client) {
 
    // Wait for client to be ready before registering commands
    client.once('ready', async () => {
-       console.log(`Logged in as ${client.user.tag}!`);
-       try {
-           await loadCommands(client);
-           console.log('Successfully registered application commands.');
-       } catch (error) {
-           console.error('Error registering commands:', error);
-       }
-   });
-
+        console.log(`Logged in as ${client.user.tag}!`);
+        
+        try {
+            await initializeDomainLists();
+            await loadCommands(client);
+            console.log('Successfully registered application commands.');
+        } catch (error) {
+            console.error('Error during initialization:', error);
+        }
+    });
     // Check time-based roles every 24 hours
     setInterval(async () => {
         try {
