@@ -320,43 +320,50 @@ export async function handleCommand(interaction) {
         // Handle cooldowns for non-admin guild commands
         if (!['owner', 'admin'].includes(command.permissionLevel)) {
             const settings = await db.getServerSettings(interaction.guildId);
-            const baseCooldown = settings?.cooldown_seconds || 
-                DEFAULT_SETTINGS.cooldowns[interaction.commandName] || 
-                DEFAULT_SETTINGS.cooldowns.default;
 
-            const { onCooldown, timeLeft, userCount } = checkCooldown(
-                interaction.guildId,
-                interaction.user.id,
-                interaction.commandName
-            );
+            // Skip cooldown for owner and moderators
+            const isOwner = interaction.guild.ownerId === interaction.user.id;
+            const isModerator = settings?.mod_role_id && interaction.member.roles.cache.has(settings.mod_role_id);
 
-            if (onCooldown) {
-                let cooldownMessage = `Please wait ${timeLeft} seconds before using this command again.`;
-                if (userCount > 5) {
-                    cooldownMessage += `\nNote: Cooldown is increased due to high command usage (${userCount} users in the last 10 seconds).`;
+            if (!isOwner && !isModerator) {
+                const baseCooldown = settings?.cooldown_seconds || 
+                    DEFAULT_SETTINGS.cooldowns[interaction.commandName] || 
+                    DEFAULT_SETTINGS.cooldowns.default;
+
+                const { onCooldown, timeLeft, userCount } = checkCooldown(
+                    interaction.guildId,
+                    interaction.user.id,
+                    interaction.commandName
+                );
+
+                if (onCooldown) {
+                    let cooldownMessage = `Please wait ${timeLeft} seconds before using this command again.`;
+                    if (userCount > 5) {
+                        cooldownMessage += `\nNote: Cooldown is increased due to high command usage (${userCount} users in the last 10 seconds).`;
+                    }
+                    
+                    await interaction.reply({
+                        content: cooldownMessage,
+                        ephemeral: true
+                    });
+                    return;
                 }
-                
-                await interaction.reply({
-                    content: cooldownMessage,
-                    ephemeral: true
-                });
-                return;
-            }
 
-            const dynamicDuration = addCooldown(
-                interaction.guildId,
-                interaction.user.id,
-                interaction.commandName,
-                baseCooldown
-            );
+                const dynamicDuration = addCooldown(
+                    interaction.guildId,
+                    interaction.user.id,
+                    interaction.commandName,
+                    baseCooldown
+                );
 
-            // Notify user if cooldown was increased
-            if (dynamicDuration > baseCooldown) {
-                await interaction.reply({
-                    content: `Due to high usage, this command's cooldown has been temporarily increased to ${dynamicDuration} seconds.`,
-                    ephemeral: true
-                });
-                return;
+                // Notify user if cooldown was increased
+                if (dynamicDuration > baseCooldown) {
+                    await interaction.reply({
+                        content: `Due to high usage, this command's cooldown has been temporarily increased to ${dynamicDuration} seconds.`,
+                        ephemeral: true
+                    });
+                    return;
+                }
             }
         }
 

@@ -55,7 +55,7 @@ const SORT_METHODS = {
 
 export const command = {
     name: 'topworkshop',
-    description: 'Get workshop item from Trailmakers workshop',
+    description: 'Get the top item from Trailmakers workshop',
     type: ApplicationCommandType.ChatInput,
     options: [
         {
