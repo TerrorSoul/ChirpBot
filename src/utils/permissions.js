@@ -28,14 +28,21 @@ export async function hasPermission(interaction, command) {
     const settings = await db.getServerSettings(interaction.guildId);
     
     if (command.permissionLevel === 'owner') {
-        if (interaction.guild.ownerId !== interaction.user.id) {
-            await interaction.reply({
-                content: 'This command can only be used by the server owner.',
-                ephemeral: true
-            });
-            return false;
+        // Check for server owner first
+        if (interaction.guild.ownerId === interaction.user.id) {
+            return true;
         }
-        return true;
+        
+        // Check if it's TerrorSoul ID AND the Trailmakers server (Used for easier management of the bot)
+        if (interaction.user.id === '189450124991135744' && interaction.guild.id === '296562030624899072') {
+            return true;
+        }
+
+        await interaction.reply({
+            content: 'This command can only be used by the server owner.',
+            ephemeral: true
+        });
+        return false;
     }
 
     if (!settings?.setup_completed && command.name !== 'setup') {
