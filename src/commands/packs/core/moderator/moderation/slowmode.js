@@ -1,6 +1,5 @@
 // commands/packs/core/moderator/moderation/slowmode.js
 import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
 
 export const command = {
     name: 'slowmode',
@@ -43,11 +42,6 @@ export const command = {
 
             // set slowmode
             await channel.setRateLimitPerUser(seconds, reason);
-
-            // log the action
-            await logAction(interaction, 'SLOWMODE', 
-                `Channel: ${channel.name}\nSlowmode: ${seconds} seconds\nReason: ${reason}`
-            );
 
             // response message
             const response = seconds === 0 

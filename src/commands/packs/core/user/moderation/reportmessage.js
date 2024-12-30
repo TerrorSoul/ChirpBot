@@ -1,5 +1,6 @@
-// commands/packs/core/user/moderation/reportmessage.js
-import { ApplicationCommandType, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+// reportmessage.js
+import { ApplicationCommandType, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ChannelType, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 import db from '../../../../../database/index.js';
 
 export const command = {
@@ -14,9 +15,9 @@ export const command = {
             const message = interaction.targetMessage;
             const settings = await db.getServerSettings(interaction.guildId);
             
-            if (!settings?.reports_channel_id) {
+            if (!settings?.log_channel_id) {
                 return interaction.reply({
-                    content: 'Reports channel has not been configured. Please contact a server administrator.',
+                    content: 'Logging channel has not been configured. Please contact a server administrator.',
                     ephemeral: true
                 });
             }
@@ -31,6 +32,15 @@ export const command = {
             if (message.author.bot) {
                 return interaction.reply({
                     content: 'You cannot report bot messages.',
+                    ephemeral: true
+                });
+            }
+
+            // Check if message author is banned
+            const isBanned = await interaction.guild.bans.fetch(message.author.id).catch(() => null);
+            if (isBanned) {
+                return interaction.reply({
+                    content: 'This user is banned from the server.',
                     ephemeral: true
                 });
             }
@@ -62,9 +72,31 @@ export const command = {
 
             const reason = submitted.fields.getTextInputValue('report_reason');
 
+            const logChannel = await interaction.guild.channels.fetch(settings.log_channel_id);
+            if (!logChannel || logChannel.type !== ChannelType.GuildForum) {
+                return submitted.reply({
+                    content: 'Logging channel has not been configured properly. Please contact a server administrator.',
+                    ephemeral: true
+                });
+            }
+
+            // Get or create thread for reported user
+            const thread = await loggingService.getOrCreateUserThread(
+                logChannel,
+                message.author.id,
+                message.author.tag
+            );
+
+            if (!thread) {
+                return submitted.reply({
+                    content: 'Could not create log thread for this report.',
+                    ephemeral: true
+                });
+            }
+
             const reportEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
-                .setTitle('🚨 Message Report')
+                .setTitle('Message Reported')
                 .addFields(
                     { 
                         name: 'Reported Message', 
@@ -111,7 +143,6 @@ export const command = {
                 });
             }
 
-            const reportsChannel = await interaction.guild.channels.fetch(settings.reports_channel_id);
             const buttons = new ActionRowBuilder()
                 .addComponents(
                     new ButtonBuilder()
@@ -126,27 +157,21 @@ export const command = {
                         .setEmoji('🗑️')
                 );
 
-            const reportMessage = await reportsChannel.send({ 
+            const reportMessage = await thread.send({
                 embeds: [reportEmbed],
                 components: [buttons]
             });
 
+            // Create report in database
             await db.createReport({
                 guild_id: interaction.guildId,
                 reporter_id: interaction.user.id,
                 reported_user_id: message.author.id,
-                message_id: message.id,
+                message_id: reportMessage.id,
                 channel_id: message.channel.id,
                 type: 'MESSAGE',
                 reason: reason
             });
-
-            await db.logAction(
-                interaction.guildId,
-                'MESSAGE_REPORT',
-                interaction.user.id,
-                `Reported message from ${message.author.tag} (${message.author.id}) in #${message.channel.name}`
-            );
 
             await submitted.reply({
                 content: 'Your report has been submitted to the moderators. Thank you for helping keep the server safe!',

@@ -20,13 +20,14 @@ export const command = {
         try {
             // warnings (including expired ones)
             const warnings = await interaction.client.db.getAllWarnings(interaction.guildId, user.id);
-            const activeWarnings = warnings.filter(w => {
+            
+            // Filter out warnings that were actually auto-bans
+            const filteredWarnings = warnings.filter(w => !w.reason.toLowerCase().includes('auto-banned'));
+            
+            const activeWarnings = filteredWarnings.filter(w => {
                 if (!w.expires_at) return true;
                 return new Date(w.expires_at) > new Date();
             });
-
-            // recent moderation actions
-            const modActions = await interaction.client.db.getModActions(interaction.guildId, user.id);
 
             const embed = new EmbedBuilder()
                 .setColor(member?.displayHexColor || '#FF0000')
@@ -49,9 +50,9 @@ export const command = {
                         inline: false
                     },
                     {
-                        name: `Total Warnings (${warnings.length})`,
-                        value: warnings.length > 0
-                            ? warnings.map(w => {
+                        name: `Total Warnings (${filteredWarnings.length})`,
+                        value: filteredWarnings.length > 0
+                            ? filteredWarnings.map(w => {
                                 const date = new Date(w.created_at).toLocaleDateString();
                                 const expired = w.expires_at && new Date(w.expires_at) <= new Date();
                                 return `• ${date}: ${w.reason} ${expired ? '(Expired)' : ''}`;
@@ -60,18 +61,6 @@ export const command = {
                         inline: false
                     }
                 );
-
-            // recent moderation actions if any exist
-            if (modActions && modActions.length > 0) {
-                embed.addFields({
-                    name: 'Recent Moderation Actions',
-                    value: modActions.map(action => {
-                        const date = new Date(action.created_at).toLocaleDateString();
-                        return `• ${date}: ${action.action_type} - ${action.action_details}`;
-                    }).join('\n'),
-                    inline: false
-                });
-            }
 
             await interaction.reply({ 
                 embeds: [embed],

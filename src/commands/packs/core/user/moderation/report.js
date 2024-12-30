@@ -1,78 +1,95 @@
-// commands/packs/core/user/moderation/report.js
-import { ApplicationCommandOptionType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+// report.js
+import { ApplicationCommandOptionType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ChannelType, ButtonStyle } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 import db from '../../../../../database/index.js';
 
 export const command = {
     name: 'report',
-    description: 'Report a user or send an inquiry to moderators',
+    description: 'Report a user',
     permissionLevel: 'user',
     options: [
-        {
-            name: 'type',
-            type: ApplicationCommandOptionType.String,
-            description: 'Type of report',
-            required: true,
-            choices: [
-                { name: 'User Report', value: 'user' },
-                { name: 'General Inquiry', value: 'inquiry' }
-            ]
-        },
-        {
-            name: 'reason',
-            type: ApplicationCommandOptionType.String,
-            description: 'Reason for report or inquiry details',
-            required: true
-        },
         {
             name: 'user',
             type: ApplicationCommandOptionType.User,
             description: 'User to report',
-            required: false
+            required: true,
+        },
+        {
+            name: 'reason',
+            type: ApplicationCommandOptionType.String,
+            description: 'Reason for report',
+            required: true
         }
     ],
     execute: async (interaction) => {
         try {
-            const type = interaction.options.getString('type');
             const user = interaction.options.getUser('user');
             const reason = interaction.options.getString('reason');
 
-            const settings = await db.getServerSettings(interaction.guildId);
-            if (!settings?.reports_channel_id) {
+            // Check if user is banned
+            const isBanned = await interaction.guild.bans.fetch(user.id).catch(() => null);
+            if (isBanned) {
                 return interaction.reply({
-                    content: 'Reports cannot be processed at this time. Please contact a server administrator.',
+                    content: 'This user is banned from the server.',
                     ephemeral: true
                 });
             }
 
-            if (type === 'user' && !user) {
+            const settings = await db.getServerSettings(interaction.guildId);
+            if (!settings?.log_channel_id) {
                 return interaction.reply({
-                    content: 'You must specify a user for a user report.',
+                    content: 'Logging channel has not been configured. Please contact a server administrator.',
+                    ephemeral: true
+                });
+            }
+
+            const logChannel = await interaction.guild.channels.fetch(settings.log_channel_id);
+            if (!logChannel || logChannel.type !== ChannelType.GuildForum) {
+                return interaction.reply({
+                    content: 'Logging channel has not been configured properly. Please contact a server administrator.',
+                    ephemeral: true
+                });
+            }
+
+            // Get or create user thread
+            const thread = await loggingService.getOrCreateUserThread(
+                logChannel,
+                user.id,
+                user.tag
+            );
+
+            if (!thread) {
+                return interaction.reply({
+                    content: 'Could not create log thread for this report.',
                     ephemeral: true
                 });
             }
 
             const reportEmbed = new EmbedBuilder()
-                .setColor(type === 'user' ? '#FF0000' : '#0099ff')
-                .setTitle(type === 'user' ? '🚨 User Report' : '❓ Moderation Inquiry')
+                .setColor('#FF0000')
+                .setTitle('User Reported')
                 .setTimestamp()
-                .addFields({
-                    name: 'Submitted By',
-                    value: `${interaction.user.tag} (${interaction.user.id})`
-                });
-
-            if (type === 'user') {
-                reportEmbed.addFields(
-                    { name: 'Reported User', value: `${user.tag} (${user.id})`, inline: true },
-                    { name: 'Account Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
-                    { name: 'Reason', value: reason }
+                .addFields(
+                    {
+                        name: 'Reported User',
+                        value: `${user.tag} (${user.id})`,
+                        inline: true
+                    },
+                    {
+                        name: 'Account Created',
+                        value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`,
+                        inline: true
+                    },
+                    {
+                        name: 'Reason',
+                        value: reason
+                    },
+                    {
+                        name: 'Reported By',
+                        value: `${interaction.user.tag} (${interaction.user.id})`
+                    }
                 );
-            } else {
-                reportEmbed.addFields(
-                    { name: 'Inquiry Details', value: reason }
-                );
-            }
 
-            const reportsChannel = await interaction.guild.channels.fetch(settings.reports_channel_id);
             const buttons = new ActionRowBuilder()
                 .addComponents(
                     new ButtonBuilder()
@@ -87,7 +104,7 @@ export const command = {
                         .setEmoji('🗑️')
                 );
 
-            const reportMessage = await reportsChannel.send({ 
+            const reportMessage = await thread.send({
                 embeds: [reportEmbed],
                 components: [buttons]
             });
@@ -96,19 +113,11 @@ export const command = {
             await db.createReport({
                 guild_id: interaction.guildId,
                 reporter_id: interaction.user.id,
-                reported_user_id: type === 'user' ? user.id : null,
-                type: type.toUpperCase(),
+                reported_user_id: user.id,
+                message_id: reportMessage.id,
+                type: 'USER',
                 reason: reason
             });
-
-            await db.logAction(
-                interaction.guildId,
-                type === 'user' ? 'USER_REPORT' : 'MOD_INQUIRY',
-                interaction.user.id,
-                type === 'user' ? 
-                    `Reported user ${user.tag} (${user.id})` : 
-                    'Submitted moderation inquiry'
-            );
 
             await interaction.reply({
                 content: 'Your report has been submitted to the moderators. Thank you for helping keep the server safe!',

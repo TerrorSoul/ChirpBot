@@ -1,5 +1,5 @@
-import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'ban',
@@ -34,29 +34,52 @@ export const command = {
         
         try {
             const memberToBan = await interaction.guild.members.fetch(user.id);
-            await memberToBan.ban({ 
-                deleteMessageDays: days,
-                reason: reason
-            });
-            
-            await logAction(interaction, 'Ban', `User: ${user.tag}\nReason: ${reason}\nMessage deletion: ${days} days`);
 
+            // Create the DM embed
             const dmEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
-                .setTitle(`Banned from ${interaction.guild.name}`)
-                .setDescription(reason)
-                .setFooter({ text: `Banned by ${interaction.user.tag}` });
+                .setTitle('🚫 You Have Been Banned')
+                .setDescription(`You have been banned from **${interaction.guild.name}**`)
+                .addFields(
+                    { name: 'Reason', value: reason },
+                    { name: 'Banned By', value: interaction.user.tag }
+                )
+                .setTimestamp();
 
+            // Try to send DM before banning
             try {
                 await user.send({ embeds: [dmEmbed] });
             } catch (error) {
-                console.error('Failed to send ban DM:', error);
+                // Only log if it's not a "Cannot send messages to this user" error
+                if (error.code !== 50007) {
+                    console.error('Failed to send ban DM:', error);
+                }
             }
 
+            // Convert days to seconds
+            const deleteMessageSeconds = days * 24 * 60 * 60;
+
+            // Execute the ban
+            await memberToBan.ban({ 
+                deleteMessageSeconds,
+                reason: reason
+            });
+            
+            // Log the ban
+            await loggingService.logEvent(interaction.guild, 'BAN', {
+                userId: user.id,
+                userTag: user.tag,
+                modTag: interaction.user.tag,
+                reason: reason,
+                deleteMessageSeconds
+            });
+
+            // Reply to the command
             await interaction.reply({
-                content: `Banned ${user.tag}`,
+                content: `Successfully banned ${user.tag}`,
                 ephemeral: true
             });
+
         } catch (error) {
             console.error('Error banning user:', error);
             await interaction.reply({

@@ -1,6 +1,5 @@
-// commands/packs/core/owner/moderation/obliterate.js
 import { ApplicationCommandOptionType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'obliterate',
@@ -118,10 +117,12 @@ export const command = {
                         reason: `Obliterated: ${reason}`
                     });
 
-                    // Log the action
-                    await logAction(interaction, 'Obliteration', 
-                        `User: ${user.tag}\nReason: ${reason}\nAction: ${totalDeleted} messages deleted and user banned`
-                    );
+                    await loggingService.logEvent(interaction.guild, 'OBLITERATE', {
+                        userId: user.id,
+                        modTag: interaction.user.tag,
+                        reason: reason,
+                        messagesDeleted: totalDeleted
+                    });
 
                     // Try to DM the user
                     const dmEmbed = new EmbedBuilder()
@@ -136,7 +137,6 @@ export const command = {
                         console.error('Failed to send obliteration DM:', error);
                     }
 
-                    // Final confirmation
                     await interaction.editReply({
                         content: `✅ ${user.tag} has been obliterated from the server.\nTotal messages deleted: ${totalDeleted}`,
                         components: []

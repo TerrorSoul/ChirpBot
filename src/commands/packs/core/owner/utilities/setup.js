@@ -1,8 +1,19 @@
 // commands/packs/core/owner/utilities/setup.js
-import { ApplicationCommandOptionType, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes } from 'discord.js';
+import { 
+    ApplicationCommandOptionType, 
+    ChannelType, 
+    EmbedBuilder, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    REST, 
+    Routes,
+    PermissionFlagsBits 
+} from 'discord.js';
 import db from '../../../../../database/index.js';
 import { logAction } from '../../../../../utils/logging.js';
 import { WELCOME_MESSAGES, FILTERED_TERMS } from '../../../../../config/constants.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'setup',
@@ -49,16 +60,9 @@ export const command = {
         {
             name: 'log_channel',
             type: ApplicationCommandOptionType.Channel,
-            description: 'Channel for logs',
+            description: 'Channel for logging',
             required: false,
-            channel_types: [ChannelType.GuildText]
-        },
-        {
-            name: 'reports_channel',
-            type: ApplicationCommandOptionType.Channel,
-            description: 'Channel for user reports',
-            required: false,
-            channel_types: [ChannelType.GuildText]
+            channel_types: [ChannelType.GuildText, ChannelType.GuildForum]
         },
         {
             name: 'welcome_channel',
@@ -127,7 +131,6 @@ export const command = {
             required: false
         }
     ],
-
     execute: async (interaction) => {
         if (interaction.guild.ownerId !== interaction.user.id) {
             return interaction.reply({
@@ -136,9 +139,9 @@ export const command = {
             });
         }
     
-        // Check bot permissions first
+        // Check bot permissions
         const botMember = interaction.guild.members.cache.get(interaction.client.user.id);
-        if (!botMember.permissions.has('ManageRoles') || !botMember.permissions.has('ManageChannels')) {
+        if (!botMember.permissions.has(['ManageRoles', 'ManageChannels'])) {
             return interaction.reply({
                 content: 'I need the "Manage Roles" and "Manage Channels" permissions to run setup.',
                 ephemeral: true
@@ -152,17 +155,41 @@ export const command = {
         try {
             let settings;
     
-            // Check channel permissions if channels are specified
+            // Check channel permissions if channels are provided
             const logChannel = interaction.options.getChannel('log_channel');
-            const reportsChannel = interaction.options.getChannel('reports_channel');
             const welcomeChannel = interaction.options.getChannel('welcome_channel');
     
-            const channelsToCheck = [logChannel, reportsChannel, welcomeChannel].filter(Boolean);
-            for (const channel of channelsToCheck) {
+            if (logChannel) {
+                const permissions = logChannel.permissionsFor(interaction.client.user);
+                const requiredPerms = [
+                    'ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory'
+                ];
+
+                if (logChannel.type === ChannelType.GuildForum) {
+                    requiredPerms.push('ManageThreads', 'CreatePublicThreads');
+                }
+                
+                if (!requiredPerms.every(perm => permissions.has(perm))) {
+                    return interaction.reply({
+                        content: `I need the following permissions in the log channel: ${requiredPerms.join(', ')}`,
+                        ephemeral: true
+                    });
+                }
+
+                // Initialize forum channel if needed
+                if (logChannel.type === ChannelType.GuildForum) {
+                    await loggingService.initializeForumChannel(logChannel).catch(err => {
+                        console.error('Failed to initialize forum channel:', err);
+                    });
+                }
+            }
+
+            const otherChannels = [welcomeChannel].filter(Boolean);
+            for (const channel of otherChannels) {
                 const permissions = channel.permissionsFor(interaction.client.user);
                 if (!permissions.has(['ViewChannel', 'SendMessages'])) {
                     return interaction.reply({
-                        content: `I don't have permission to send messages in ${channel}. Please give me the "View Channel" and "Send Messages" permissions for that channel.`,
+                        content: `I don't have permission to send messages in ${channel}. Please give me the "View Channel" and "Send Messages" permissions.`,
                         ephemeral: true
                     });
                 }
@@ -248,7 +275,7 @@ export const command = {
                 });
                 return;
             }
-     
+
             console.log('Updating server settings...');
             await db.updateServerSettings(interaction.guildId, settings);
      
@@ -259,7 +286,6 @@ export const command = {
                     await db.importDefaultTerms(interaction.guildId, FILTERED_TERMS, 'SYSTEM');
                 }
             }
-     
             // Handle command packs setup
             const commandPacksOption = interaction.options.getString('command_packs');
             if (commandPacksOption !== null) {
@@ -288,15 +314,21 @@ export const command = {
             interaction.client.emit('reloadCommands');
      
             console.log('Setup completed successfully');
-    
-            // Check if we can access the log channel before logging
+
+            // Initialize forum channel if it exists and is a forum channel
             if (settings.log_channel_id) {
-                const logChannel = interaction.guild.channels.cache.get(settings.log_channel_id);
-                if (logChannel && logChannel.permissionsFor(interaction.client.user).has(['ViewChannel', 'SendMessages'])) {
-                    await logAction(interaction, 'SETUP', 'Bot configuration updated');
+                try {
+                    const channel = await interaction.guild.channels.fetch(settings.log_channel_id);
+                    if (channel.type === ChannelType.GuildForum) {
+                        await loggingService.initializeForumChannel(channel).catch(err => {
+                            console.error('Failed to initialize forum channel:', err);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error verifying log channel:', error);
                 }
             }
-     
+            
             const embed = await createSetupSummaryEmbed(interaction, settings);
             await interaction.editReply({ embeds: [embed] });
      
@@ -316,8 +348,76 @@ export const command = {
         }
     }
 };
+async function createLogChannel(guild, modRole) {
+    // Determine channel type based on server features
+    const isCommunityServer = guild.features.includes('COMMUNITY');
+    const channelType = isCommunityServer ? ChannelType.GuildForum : ChannelType.GuildText;
+
+    console.log(`Creating ${isCommunityServer ? 'forum' : 'text'} channel for logging`);
+
+    // Create the channel
+    const logChannel = await guild.channels.create({
+        name: 'logs',
+        type: channelType,
+        permissionOverwrites: [
+            {
+                id: guild.id,
+                deny: ['ViewChannel']
+            },
+            {
+                id: modRole.id,
+                allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
+            },
+            {
+                id: guild.client.user.id,
+                allow: [
+                    'ViewChannel',
+                    'SendMessages',
+                    'EmbedLinks',
+                    'ReadMessageHistory',
+                    'ManageThreads',
+                    'CreatePublicThreads'
+                ]
+            }
+        ],
+        reason: 'Bot setup - logging channel'
+    });
+
+    // Initial delay after channel creation
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Verify channel exists after initial creation
+    let verifiedChannel = await guild.channels.fetch(logChannel.id);
+
+    // If it's a forum channel, initialize tags
+    if (isCommunityServer) {
+        // Additional delay before setting tags
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        await verifiedChannel.setAvailableTags([
+            { name: 'Log', moderated: true },
+            { name: 'Banned', moderated: true },
+            { name: 'Muted', moderated: true },
+            { name: 'Reported', moderated: true }
+        ]).catch(err => {
+            console.error('Error setting forum tags:', err);
+        });
+
+        // Final delay after setting tags
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Final verification after all operations
+        verifiedChannel = await guild.channels.fetch(logChannel.id);
+    }
+
+    console.log(`Created channel ${verifiedChannel.name} (${verifiedChannel.id})`);
+    return verifiedChannel;
+}
 
 async function quickSetup(interaction) {
+    // Temporarily disable logging
+    interaction.guild.settings = null;
+
     const cooldown = interaction.options.getInteger('cooldown') ?? 5;
     const warningThreshold = interaction.options.getInteger('warning_threshold') ?? 3;
     const warningExpireDays = interaction.options.getInteger('warning_expire_days') ?? 30;
@@ -331,112 +431,132 @@ async function quickSetup(interaction) {
         'Your message was removed because it contained inappropriate content.';
     const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious') ?? true;
     
-    // If no specific packs were chosen, get all available non-core packs
     if (!interaction.options.getString('command_packs')) {
         const allPacks = await db.getAllPacks();
         const nonCorePacks = allPacks
             .filter(pack => !pack.is_core)
             .map(pack => pack.name);
         
-        // Set the command_packs option
         interaction.options._hoistedOptions.push({
             name: 'command_packs',
             type: ApplicationCommandOptionType.String,
             value: nonCorePacks.join(',')
         });
     }
-    
+
+    // Create mod role first
     const modRole = await interaction.guild.roles.create({
         name: 'Bot Moderator',
         color: 0x0000FF,
         reason: 'Bot setup - moderator role'
     });
 
-    const logChannel = await interaction.guild.channels.create({
-        name: 'logs',
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-            {
-                id: interaction.guild.id,
-                deny: ['ViewChannel']
-            },
-            {
-                id: modRole.id,
-                allow: ['ViewChannel']
-            },
-            {
-                id: interaction.client.user.id,
-                allow: ['ViewChannel', 'SendMessages']
-            }
-        ]
-    });
-    const reportsChannel = await interaction.guild.channels.create({
-        name: 'reports',
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-            {
-                id: interaction.guild.id,
-                deny: ['ViewChannel']
-            },
-            {
-                id: modRole.id,
-                allow: ['ViewChannel', 'SendMessages']
-            },
-            {
-                id: interaction.client.user.id,
-                allow: ['ViewChannel', 'SendMessages']
-            }
-        ]
-    });
-    
-    const welcomeChannel = await interaction.guild.channels.create({
-        name: 'welcome',
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-            {
-                id: interaction.guild.id,
-                allow: ['ViewChannel'],
-                deny: ['SendMessages']
-            },
-            {
-                id: interaction.client.user.id,
-                allow: ['ViewChannel', 'SendMessages']
-            }
-        ]
-    });
+    // Wait for role creation to propagate
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
-    return {
-        guild_id: interaction.guildId,
-        setup_completed: true,
-        mod_role_id: modRole.id,
-        log_channel_id: logChannel.id,
-        reports_channel_id: reportsChannel.id,
-        welcome_channel_id: welcomeChannel.id,
-        warning_threshold: warningThreshold,
-        warning_expire_days: warningExpireDays,
-        cooldown_seconds: cooldown,
-        welcome_enabled: true,
-        welcome_messages: JSON.stringify(WELCOME_MESSAGES),
-        disabled_commands: '',
-        spam_protection: spamProtection,
-        spam_threshold: spamThreshold,
-        spam_interval: spamInterval * 1000,
-        spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.',
-        channel_restrictions_enabled: restrictChannels,
-        content_filter_enabled: contentFilterEnabled,
-        content_filter_notify_user: contentFilterNotify,
-        content_filter_log_suspicious: contentFilterSuspicious,
-        content_filter_notify_message: contentFilterMessage
-    };
+    let logChannel;
+    const isCommunityServer = interaction.guild.features.includes('COMMUNITY');
+    let reportsChannel = null;
+    
+    try {
+        // Create and verify log channel
+        logChannel = await createLogChannel(interaction.guild, modRole);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        logChannel = await interaction.guild.channels.fetch(logChannel.id);
+        console.log('Log channel created and verified:', logChannel.id);
+
+        // Create reports channel for non-community servers
+        if (!isCommunityServer) {
+            reportsChannel = await interaction.guild.channels.create({
+                name: 'reports',
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                    {
+                        id: interaction.guild.id,
+                        deny: ['ViewChannel']
+                    },
+                    {
+                        id: modRole.id,
+                        allow: ['ViewChannel', 'SendMessages']
+                    },
+                    {
+                        id: interaction.client.user.id,
+                        allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory']
+                    }
+                ],
+                reason: 'Bot setup - reports channel'
+            });
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            reportsChannel = await interaction.guild.channels.fetch(reportsChannel.id);
+        }
+
+        // Create welcome channel
+        const welcomeChannel = await interaction.guild.channels.create({
+            name: 'welcome',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+                {
+                    id: interaction.guild.id,
+                    allow: ['ViewChannel'],
+                    deny: ['SendMessages']
+                },
+                {
+                    id: interaction.client.user.id,
+                    allow: ['ViewChannel', 'SendMessages']
+                }
+            ]
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const verifiedWelcomeChannel = await interaction.guild.channels.fetch(welcomeChannel.id);
+
+        const settings = {
+            guild_id: interaction.guildId,
+            setup_completed: true,
+            mod_role_id: modRole.id,
+            log_channel_id: logChannel.id,
+            reports_channel_id: reportsChannel?.id,
+            welcome_channel_id: verifiedWelcomeChannel.id,
+            warning_threshold: warningThreshold,
+            warning_expire_days: warningExpireDays,
+            cooldown_seconds: cooldown,
+            welcome_enabled: true,
+            welcome_messages: JSON.stringify(WELCOME_MESSAGES),
+            disabled_commands: '',
+            spam_protection: spamProtection,
+            spam_threshold: spamThreshold,
+            spam_interval: spamInterval * 1000,
+            spam_warning_message: 'Please do not spam! You have {warnings} warnings remaining before being banned.',
+            channel_restrictions_enabled: restrictChannels,
+            content_filter_enabled: contentFilterEnabled,
+            content_filter_notify_user: contentFilterNotify,
+            content_filter_log_suspicious: contentFilterSuspicious,
+            content_filter_notify_message: contentFilterMessage
+        };
+
+        // Save settings and wait
+        await db.updateServerSettings(interaction.guildId, settings);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Re-enable logging with new settings
+        interaction.guild.settings = settings;
+
+        return settings;
+    } catch (error) {
+        console.error('Error in quick setup:', error);
+        throw error;
+    }
 }
 
 async function manualSetup(interaction) {
+    // Temporarily disable logging
+    interaction.guild.settings = null;
+
     const cooldown = interaction.options.getInteger('cooldown');
     const warningThreshold = interaction.options.getInteger('warning_threshold');
     const warningExpireDays = interaction.options.getInteger('warning_expire_days');
     const modRole = interaction.options.getRole('mod_role');
-    const logChannel = interaction.options.getChannel('log_channel');
-    const reportsChannel = interaction.options.getChannel('reports_channel');
+    let logChannel = interaction.options.getChannel('log_channel');
     const welcomeChannel = interaction.options.getChannel('welcome_channel');
     const welcomeEnabled = interaction.options.getBoolean('welcome_enabled');
     const spamProtection = interaction.options.getBoolean('spam_protection');
@@ -447,32 +567,123 @@ async function manualSetup(interaction) {
     const contentFilterNotify = interaction.options.getBoolean('content_filter_notify');
     const contentFilterMessage = interaction.options.getString('content_filter_message');
     const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious');
+    
     const settings = {};
+    const isCommunityServer = interaction.guild.features.includes('COMMUNITY');
 
-    // Only include values that were actually provided
-    if (cooldown !== null) settings.cooldown_seconds = cooldown;
-    if (warningThreshold !== null) settings.warning_threshold = warningThreshold;
-    if (warningExpireDays !== null) settings.warning_expire_days = warningExpireDays;
-    if (modRole) settings.mod_role_id = modRole.id;
-    if (logChannel) settings.log_channel_id = logChannel.id;
-    if (reportsChannel) settings.reports_channel_id = reportsChannel.id;
-    if (welcomeChannel) settings.welcome_channel_id = welcomeChannel.id;
-    if (welcomeEnabled !== null) settings.welcome_enabled = welcomeEnabled;
-    if (spamProtection !== null) settings.spam_protection = spamProtection;
-    if (spamThreshold !== null) settings.spam_threshold = spamThreshold;
-    if (spamInterval !== null) settings.spam_interval = spamInterval * 1000;
-    if (restrictChannels !== null) settings.channel_restrictions_enabled = restrictChannels;
-    if (contentFilterEnabled !== null) settings.content_filter_enabled = contentFilterEnabled;
-    if (contentFilterNotify !== null) settings.content_filter_notify_user = contentFilterNotify;
-    if (contentFilterMessage !== null) settings.content_filter_notify_message = contentFilterMessage;
-    if (contentFilterSuspicious !== null) settings.content_filter_log_suspicious = contentFilterSuspicious;
+    try {
+        // Handle log channel setup
+        if (logChannel) {
+            if (logChannel.type === ChannelType.GuildForum) {
+                await loggingService.initializeForumChannel(logChannel);
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                logChannel = await interaction.guild.channels.fetch(logChannel.id);
+            }
+            settings.log_channel_id = logChannel.id;
 
-    // Set welcome messages if enabling welcome messages for the first time
-    if (welcomeEnabled && !settings.welcome_messages) {
-        settings.welcome_messages = JSON.stringify(WELCOME_MESSAGES);
+            if (!isCommunityServer) {
+                const existingSettings = await db.getServerSettings(interaction.guildId);
+                const actualModRole = modRole || 
+                    interaction.guild.roles.cache.get(existingSettings?.mod_role_id) ||
+                    interaction.guild.roles.cache.find(r => r.name === 'Bot Moderator');
+
+                if (actualModRole) {
+                    const reportsChannel = await interaction.guild.channels.create({
+                        name: 'reports',
+                        type: ChannelType.GuildText,
+                        permissionOverwrites: [
+                            {
+                                id: interaction.guild.id,
+                                deny: ['ViewChannel']
+                            },
+                            {
+                                id: actualModRole.id,
+                                allow: ['ViewChannel', 'SendMessages']
+                            },
+                            {
+                                id: interaction.guild.members.me.id,
+                                allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory']
+                            }
+                        ],
+                        reason: 'Bot setup - reports channel'
+                    });
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    settings.reports_channel_id = reportsChannel.id;
+                }
+            }
+        } else {
+            const existingSettings = await db.getServerSettings(interaction.guildId);
+            if (!existingSettings?.log_channel_id) {
+                const actualModRole = modRole || await interaction.guild.roles.create({
+                    name: 'Bot Moderator',
+                    color: 0x0000FF,
+                    reason: 'Bot setup - moderator role'
+                });
+
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                logChannel = await createLogChannel(interaction.guild, actualModRole);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                logChannel = await interaction.guild.channels.fetch(logChannel.id);
+                settings.log_channel_id = logChannel.id;
+
+                if (!isCommunityServer) {
+                    const reportsChannel = await interaction.guild.channels.create({
+                        name: 'reports',
+                        type: ChannelType.GuildText,
+                        permissionOverwrites: [
+                            {
+                                id: interaction.guild.id,
+                                deny: ['ViewChannel']
+                            },
+                            {
+                                id: actualModRole.id,
+                                allow: ['ViewChannel', 'SendMessages']
+                            },
+                            {
+                                id: interaction.guild.members.me.id,
+                                allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory']
+                            }
+                        ],
+                        reason: 'Bot setup - reports channel'
+                    });
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    settings.reports_channel_id = reportsChannel.id;
+                }
+
+                if (!modRole) settings.mod_role_id = actualModRole.id;
+            }
+        }
+
+        // Add all provided settings
+        if (cooldown !== null) settings.cooldown_seconds = cooldown;
+        if (warningThreshold !== null) settings.warning_threshold = warningThreshold;
+        if (warningExpireDays !== null) settings.warning_expire_days = warningExpireDays;
+        if (modRole) settings.mod_role_id = modRole.id;
+        if (welcomeChannel) settings.welcome_channel_id = welcomeChannel.id;
+        if (welcomeEnabled !== null) settings.welcome_enabled = welcomeEnabled;
+        if (spamProtection !== null) settings.spam_protection = spamProtection;
+        if (spamThreshold !== null) settings.spam_threshold = spamThreshold;
+        if (spamInterval !== null) settings.spam_interval = spamInterval * 1000;
+        if (restrictChannels !== null) settings.channel_restrictions_enabled = restrictChannels;
+        if (contentFilterEnabled !== null) settings.content_filter_enabled = contentFilterEnabled;
+        if (contentFilterNotify !== null) settings.content_filter_notify_user = contentFilterNotify;
+        if (contentFilterMessage !== null) settings.content_filter_notify_message = contentFilterMessage;
+        if (contentFilterSuspicious !== null) settings.content_filter_log_suspicious = contentFilterSuspicious;
+
+        if (welcomeEnabled && !settings.welcome_messages) {
+            settings.welcome_messages = JSON.stringify(WELCOME_MESSAGES);
+        }
+
+        // Save settings and re-enable logging
+        await db.updateServerSettings(interaction.guildId, settings);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        interaction.guild.settings = await db.getServerSettings(interaction.guildId);
+
+        return settings;
+    } catch (error) {
+        console.error('Error in manual setup:', error);
+        throw error;
     }
-
-    return settings;
 }
 
 async function setupCommandPacks(interaction) {
@@ -481,7 +692,6 @@ async function setupCommandPacks(interaction) {
     console.log(`Setting up command packs for guild ${interaction.guildId}`);
    
     if (selectedPacks === null) {
-        // If command_packs wasn't specified, don't change anything
         return;
     }
 
@@ -494,13 +704,13 @@ async function setupCommandPacks(interaction) {
             }
         }
 
-        // If "none" was provided or empty string, we're done (all non-core packs are now disabled)
+        // If "none" was provided or empty string, we're done
         if (selectedPacks.toLowerCase() === 'none' || !selectedPacks.trim()) {
             console.log('Disabling all non-core packs');
             return;
         }
 
-        // Otherwise, enable the specified packs
+        // Enable the specified packs
         const packNames = selectedPacks.split(',').filter(name => name.trim());
         for (const packName of packNames) {
             try {
@@ -536,7 +746,6 @@ async function createSetupSummaryEmbed(interaction, settings) {
             {
                 name: 'Channels',
                 value: `${settings.log_channel_id ? `Logs: <#${settings.log_channel_id}>` : 'No log channel set'}
-${settings.reports_channel_id ? `Reports: <#${settings.reports_channel_id}>` : 'No reports channel set'}
 ${settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : 'No welcome channel set'}`.trim(),
                 inline: true
             },
@@ -550,12 +759,6 @@ Content Filter: ${settings.content_filter_enabled ? 'Enabled' : 'Disabled'}
 Filter Notifications: ${settings.content_filter_notify_user ? 'Enabled' : 'Disabled'}
 Log Suspicious: ${settings.content_filter_log_suspicious ? 'Enabled' : 'Disabled'}`,
                 inline: true
-            },
-            {
-                name: 'Warning Settings',
-                value: `Warning Threshold: ${settings.warning_threshold} warnings before ban
-Warning Expiry: ${settings.warning_expire_days > 0 ? `${settings.warning_expire_days} days` : 'Never'}`,
-                inline: false
             }
         );
 
@@ -597,14 +800,6 @@ Warning Threshold: ${settings.warning_threshold} warnings`,
         embed.addFields({
             name: 'Enabled Command Packs',
             value: 'Only core pack enabled',
-            inline: false
-        });
-    }
-
-    if (settings.channel_restrictions_enabled) {
-        embed.addFields({
-            name: 'Channel Restrictions',
-            value: 'Command channel restrictions are enabled. Regular users can only use commands in designated channels. Moderators and server owner can use commands anywhere.\nUse `/manageperms` to configure which commands can be used in specific channels.',
             inline: false
         });
     }

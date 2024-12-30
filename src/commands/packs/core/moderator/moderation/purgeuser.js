@@ -67,13 +67,6 @@ export const command = {
             const deletedCount = await interaction.channel.bulkDelete(userMessages, true)
                 .then(deleted => deleted.size);
 
-            await db.logAction(
-                interaction.guildId,
-                'PURGE_USER',
-                interaction.user.id,
-                `Purged ${deletedCount} messages from user ${targetUser.tag} (${targetUser.id}) in ${interaction.channel.name} | Reason: ${reason}`
-            );
-
             await interaction.editReply({
                 content: `Deleted ${deletedCount} messages from ${targetUser.tag}.`,
                 ephemeral: true

@@ -1,6 +1,5 @@
 // commands/packs/core/moderator/moderation/unlock.js
 import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
 
 export const command = {
     name: 'unlock',
@@ -37,11 +36,6 @@ export const command = {
                 SendMessages: null,
                 SendMessagesInThreads: null
             });
-
-            // log
-            await logAction(interaction, 'CHANNEL_UNLOCK', 
-                `Channel: ${channel.name}\nReason: ${reason}`
-            );
 
             // notify moderator
             await interaction.reply({

@@ -8,9 +8,38 @@ import { hasPermission } from '../utils/permissions.js';
 import { checkCooldown, checkGlobalCooldown, addCooldown, addGlobalCooldown } from '../utils/cooldowns.js';
 import { DEFAULT_SETTINGS } from '../config/constants.js';
 import db from '../database/index.js';
+import { loggingService } from '../utils/loggingService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+async function ensureGuildSettings(guild) {
+    if (!guild.settings) {
+        const settings = await db.getServerSettings(guild.id);
+        guild.settings = settings;
+    }
+    return guild.settings;
+}
+
+function formatCommandOptions(options) {
+    if (!options?.data || options.data.length === 0) {
+        return null;
+    }
+
+    return options.data.map(option => {
+        let value = option.value;
+        // Handle special cases like mentions
+        if (option.type === 6) { // USER type
+            value = `<@${option.value}>`;
+        } else if (option.type === 7) { // CHANNEL type
+            value = `<#${option.value}>`;
+        } else if (option.type === 8) { // ROLE type
+            value = `<@&${option.value}>`;
+        }
+        
+        return `${option.name}: ${value}`;
+    }).join('\n');
+}
 
 export async function loadCommands(client) {
     client.commands = new Collection();
@@ -22,33 +51,28 @@ export async function loadCommands(client) {
     if (!fs.existsSync(packsPath)) {
         fs.mkdirSync(packsPath);
     }
- 
-    console.log('Starting command loading...');
-    
+
     const packs = readdirSync(packsPath);
     const globalCommandsMap = new Map();
     const guildCommandsMap = new Map();
     
     // Load core pack first if it exists
     if (packs.includes('core')) {
-        console.log('Loading core pack...');
         await loadPack('core', true);
     }
     
     // Then load other packs
     for (const packName of packs) {
         if (packName !== 'core') {
-            console.log(`Loading pack: ${packName}`);
             await loadPack(packName, false);
         }
     }
- 
+
     async function loadPack(packName, isCore) {
         const packPath = join(packsPath, packName);
         const packConfigPath = join(packPath, 'config.json');
         let packConfig = { isCore };
- 
-        // Load pack configuration
+
         if (fs.existsSync(packConfigPath)) {
             try {
                 packConfig = JSON.parse(fs.readFileSync(packConfigPath, 'utf8'));
@@ -57,8 +81,7 @@ export async function loadCommands(client) {
                 console.error(`Error loading pack config for ${packName}:`, error);
             }
         }
- 
-        // Register pack in database
+
         try {
             await db.registerCommandPack(
                 packName,
@@ -69,8 +92,7 @@ export async function loadCommands(client) {
         } catch (error) {
             console.error(`Error registering pack ${packName}:`, error);
         }
- 
-        // Load global commands
+
         const globalPath = join(packPath, 'global');
         if (fs.existsSync(globalPath)) {
             const globalFiles = readdirSync(globalPath).filter(file => file.endsWith('.js'));
@@ -86,28 +108,24 @@ export async function loadCommands(client) {
                             ApplicationCommandType.ChatInput;
                     }
                     
-                    console.log(`Loading global command: ${command.name} from pack ${packName}`);
                     if (!globalCommandsMap.has(command.name)) {
                         globalCommandsMap.set(command.name, command);
-                    } else {
-                        console.log(`Skipping duplicate global command: ${command.name}`);
                     }
                 } catch (error) {
                     console.error(`Error loading global command ${file}:`, error);
                 }
             }
         }
- 
-        // Load guild commands
+
         const permissionFolders = ['owner', 'moderator', 'user'];
         for (const permLevel of permissionFolders) {
             const permPath = join(packPath, permLevel);
             if (!fs.existsSync(permPath)) continue;
- 
+
             const categories = readdirSync(permPath, { withFileTypes: true })
                 .filter(dirent => dirent.isDirectory())
                 .map(dirent => dirent.name);
- 
+
             for (const category of categories) {
                 const categoryPath = join(permPath, category);
                 const commandFiles = readdirSync(categoryPath).filter(file => file.endsWith('.js'));
@@ -124,11 +142,8 @@ export async function loadCommands(client) {
                             command.type = ApplicationCommandType.ChatInput;
                         }
                         
-                        console.log(`Loading guild command: ${command.name} from pack ${packName}`);
                         if (!guildCommandsMap.has(command.name)) {
                             guildCommandsMap.set(command.name, command);
-                        } else {
-                            console.log(`Skipping duplicate guild command: ${command.name}`);
                         }
                     } catch (error) {
                         console.error(`Error loading guild command ${file}:`, error);
@@ -137,67 +152,42 @@ export async function loadCommands(client) {
             }
         }
     }
- 
-    // Update client collections
+
     client.globalCommands = new Collection([...globalCommandsMap.entries()]);
     client.guildCommands = new Collection([...guildCommandsMap.entries()]);
-    
-    // Create combined collection without duplicates
     const combinedCommands = new Map([...globalCommandsMap, ...guildCommandsMap]);
     client.commands = new Collection([...combinedCommands.entries()]);
- 
-    console.log('\nFinal command counts:');
-    console.log(`Global commands: ${client.globalCommands.size}`);
-    console.log(`Guild commands: ${client.guildCommands.size}`);
-    console.log(`Total unique commands: ${client.commands.size}\n`);
- 
+
+    console.log(`Loaded ${client.globalCommands.size} global commands and ${client.guildCommands.size} guild commands`);
+
     try {
-        console.log('Starting command registration with Discord...');
-        
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
         const guilds = [...client.guilds.cache.values()];
         
-        // Register guild commands
         if (guildCommandsMap.size > 0) {
             for (const guild of guilds) {
-                console.log(`Registering commands for guild: ${guild.name}`);
-                
-                // Get enabled packs for this guild
                 const enabledPacks = await db.getEnabledPacks(guild.id);
                 const enabledPackNames = enabledPacks.map(pack => pack.name);
-                console.log(`Enabled packs for guild ${guild.name}:`, enabledPackNames);
                 
-                // Filter commands based on enabled packs
                 const guildCommandsArray = Array.from(guildCommandsMap.values())
-                    .filter(cmd => {
-                        const isEnabled = cmd.pack === 'core' || enabledPackNames.includes(cmd.pack);
-                        console.log(`Command ${cmd.name} from pack ${cmd.pack}: ${isEnabled ? 'enabled' : 'disabled'}`);
-                        return isEnabled;
-                    });
+                    .filter(cmd => cmd.pack === 'core' || enabledPackNames.includes(cmd.pack));
         
-                console.log(`Registering ${guildCommandsArray.length} guild commands for ${guild.name}:`, 
-                    guildCommandsArray.map(cmd => ({ name: cmd.name, pack: cmd.pack })));
-                
                 await rest.put(
                     Routes.applicationGuildCommands(client.user.id, guild.id),
                     { body: guildCommandsArray }
                 );
             }
         }
-    
-        // Register global commands
+
         if (globalCommandsMap.size > 0) {
             const globalCommandsArray = Array.from(globalCommandsMap.values());
-            console.log(`Registering ${globalCommandsArray.length} global commands:`, 
-                globalCommandsArray.map(cmd => cmd.name));
-            
             await rest.put(
                 Routes.applicationCommands(client.user.id),
                 { body: globalCommandsArray }
             );
         }
-    
-        console.log('Command registration completed successfully.');
+
+        console.log('Command registration completed successfully');
     } catch (error) {
         console.error('Error registering commands:', error);
         throw error;
@@ -209,9 +199,9 @@ async function canUseCommand(interaction, command) {
 
     // Check pack enabled status
     if (command.pack) {
-        console.log(`Checking pack ${command.pack} for guild ${interaction.guildId}`);
+        //console.log(`Checking pack ${command.pack} for guild ${interaction.guildId}`);
         const packEnabled = await db.isPackEnabled(interaction.guildId, command.pack);
-        console.log(`Pack ${command.pack} enabled: ${packEnabled}`);
+        //console.log(`Pack ${command.pack} enabled: ${packEnabled}`);
         
         if (!packEnabled) {
             await interaction.reply({
@@ -266,6 +256,9 @@ async function canUseCommand(interaction, command) {
 
 export async function handleCommand(interaction) {
     let command;
+
+    // Force reload settings at start of command handling
+    interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
     
     try {
         if (interaction.isUserContextMenuCommand()) {
@@ -304,6 +297,18 @@ export async function handleCommand(interaction) {
 
             addGlobalCooldown(interaction.user.id, interaction.commandName);
             await command.execute(interaction);
+            // Ensure settings are up to date after command execution
+            interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
+            // Only log if it's not the reset command
+            if (interaction.commandName !== 'reset') {
+                await loggingService.logEvent(interaction.guild, 'COMMAND_USE', {
+                    userId: interaction.user.id,
+                    userTag: interaction.user.tag,
+                    channelId: interaction.channelId,
+                    commandName: interaction.commandName,
+                    options: formatCommandOptions(interaction.options)
+                });
+            }
             return;
         }
 
@@ -320,6 +325,7 @@ export async function handleCommand(interaction) {
         // Handle cooldowns for non-admin guild commands
         if (!['owner', 'admin'].includes(command.permissionLevel)) {
             const settings = await db.getServerSettings(interaction.guildId);
+            interaction.guild.settings = settings;  // Update cached settings
 
             // Skip cooldown for owner and moderators
             const isOwner = interaction.guild.ownerId === interaction.user.id;
@@ -368,6 +374,15 @@ export async function handleCommand(interaction) {
         }
 
         await command.execute(interaction);
+        // Refresh settings after command execution
+        interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
+        await loggingService.logEvent(interaction.guild, 'COMMAND_USE', {
+            userId: interaction.user.id,
+            userTag: interaction.user.tag,
+            channelId: interaction.channelId,
+            commandName: interaction.commandName,
+            options: formatCommandOptions(interaction.options)
+        });
         
     } catch (error) {
         console.error('Error executing command:', error);

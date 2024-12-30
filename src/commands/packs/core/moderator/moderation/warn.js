@@ -1,6 +1,6 @@
 import { ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
 import db from '../../../../../database/index.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'warn',
@@ -28,6 +28,15 @@ export const command = {
             const settings = await db.getServerSettings(interaction.guildId);
             await db.addWarning(interaction.guildId, user.id, interaction.user.id, reason);
             
+            const warnings = await db.getActiveWarnings(interaction.guildId, user.id);
+            
+            await loggingService.logEvent(interaction.guild, 'WARNING', {
+                userId: user.id,
+                modTag: interaction.user.tag,
+                reason: reason,
+                warningCount: warnings.length
+            });
+
             const dmEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setTitle(`Warning from ${interaction.guild.name}`)
@@ -40,17 +49,17 @@ export const command = {
                 console.error('Failed to send warning DM:', error);
             }
 
-            if (settings.warning_threshold > 0) {
-                const warnings = await db.getActiveWarnings(interaction.guildId, user.id);
-                if (warnings.length >= settings.warning_threshold) {
-                    const member = await interaction.guild.members.fetch(user.id);
-                    await member.kick(`Auto-kick: Reached warning threshold (${settings.warning_threshold})`);
-                    await logAction(interaction, 'Auto-Kick', 
-                        `User ${user.tag} was automatically kicked for exceeding warning threshold`);
-                }
+            if (settings.warning_threshold > 0 && warnings.length >= settings.warning_threshold) {
+                const member = await interaction.guild.members.fetch(user.id);
+                await member.kick(`Auto-kick: Reached warning threshold (${settings.warning_threshold})`);
+                
+                await loggingService.logEvent(interaction.guild, 'KICK', {
+                    userId: user.id,
+                    modTag: 'System',
+                    reason: `Automatically kicked for reaching warning threshold (${settings.warning_threshold} warnings)`
+                });
             }
 
-            await logAction(interaction, 'Warning', `User: ${user.tag}\nReason: ${reason}`);
             await interaction.reply({
                 content: `Warning issued to ${user.tag}`,
                 ephemeral: true

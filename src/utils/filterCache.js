@@ -65,8 +65,6 @@ async function fetchAndParseList(url) {
 }
 
 export async function initializeDomainLists() {
-    console.log('Fetching domain blocklists...');
-    
     try {
         const [newScamList, newNSFWList] = await Promise.all([
             fetchAndParseList('https://raw.githubusercontent.com/jarelllama/Scam-Blocklist/main/lists/adblock/scams.txt'),
@@ -76,7 +74,6 @@ export async function initializeDomainLists() {
         scamDomains = newScamList;
         nsfwDomains = newNSFWList;
 
-        console.log(`Loaded ${scamDomains.length} scam domains and ${nsfwDomains.length} NSFW domains`);
     } catch (error) {
         console.error('Error initializing domain lists:', error);
     }

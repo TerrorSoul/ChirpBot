@@ -1,6 +1,5 @@
-// commands/packs/core/moderator/moderation/clearwarnings.js
 import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'clearwarnings',
@@ -36,9 +35,14 @@ export const command = {
 
             await interaction.client.db.clearWarnings(interaction.guildId, user.id);
 
-            await logAction(interaction, 'WARNINGS_CLEARED', 
-                `User: ${user.tag}\nWarnings Cleared: ${warnings.length}\nReason: ${reason}`
-            );
+            // Single log event that will appear in both server logs and user's thread
+            await loggingService.logEvent(interaction.guild, 'WARNINGS_CLEARED', {
+                userId: user.id,
+                userTag: user.tag,
+                modTag: interaction.user.tag,
+                warningsCleared: warnings.length,
+                reason: reason
+            });
 
             await interaction.reply({
                 content: `Cleared ${warnings.length} warning(s) for ${user.tag}`,

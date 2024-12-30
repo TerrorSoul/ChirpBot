@@ -1,5 +1,5 @@
-import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'kick',
@@ -26,7 +26,25 @@ export const command = {
         try {
             const memberToKick = await interaction.guild.members.fetch(user.id);
             await memberToKick.kick(reason);
-            await logAction(interaction, 'Kick', `User: ${user.tag}\nReason: ${reason}`);
+
+            await loggingService.logEvent(interaction.guild, 'KICK', {
+                userId: user.id,
+                modTag: interaction.user.tag,
+                reason: reason
+            });
+
+            // Try to DM the user
+            const dmEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle(`Kicked from ${interaction.guild.name}`)
+                .setDescription(reason)
+                .setFooter({ text: `Kicked by ${interaction.user.tag}` });
+
+            try {
+                await user.send({ embeds: [dmEmbed] });
+            } catch (error) {
+                console.error('Failed to send kick DM:', error);
+            }
 
             await interaction.reply({
                 content: `Kicked ${user.tag}`,

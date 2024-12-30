@@ -1,6 +1,5 @@
-// commands/packs/core/moderator/moderation/mute.js
-import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
+import { ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'mute',
@@ -29,46 +28,51 @@ export const command = {
         }
     ],
     execute: async (interaction) => {
+        await interaction.deferReply({ ephemeral: true });
+        
         const user = interaction.options.getUser('user');
         const duration = interaction.options.getInteger('duration');
         const reason = interaction.options.getString('reason');
         
         try {
             const member = await interaction.guild.members.fetch(user.id);
-
-            // check if user can be muted
+    
             if (!member.moderatable) {
-                return interaction.reply({
-                    content: 'I cannot mute this user. They may have higher permissions than me.',
-                    ephemeral: true
+                return interaction.editReply({
+                    content: 'I cannot mute this user. They may have higher permissions than me.'
                 });
             }
-
+    
             const timeoutDuration = duration * 60 * 1000;
-
             await member.timeout(timeoutDuration, reason);
-
-            // attempt to DM the user
+    
+            await loggingService.logEvent(interaction.guild, 'MUTE', {
+                userId: user.id,
+                modTag: interaction.user.tag,
+                duration: `${duration} minutes`,
+                reason: reason
+            });
+    
+            // Try to DM the user
+            const dmEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle(`Muted in ${interaction.guild.name}`)
+                .setDescription(`Duration: ${duration} minutes\nReason: ${reason}`)
+                .setFooter({ text: `Muted by ${interaction.user.tag}` });
+    
             try {
-                await user.send(`You have been muted in ${interaction.guild.name} for ${duration} minutes.\nReason: ${reason}`);
+                await user.send({ embeds: [dmEmbed] });
             } catch (error) {
                 console.error('Failed to send mute DM:', error);
             }
-
-            await logAction(interaction, 'MUTE', 
-                `User: ${user.tag}\nDuration: ${duration} minutes\nReason: ${reason}`
-            );
-
-            await interaction.reply({
-                content: `Muted ${user.tag} for ${duration} minutes`,
-                ephemeral: true
+    
+            await interaction.editReply({
+                content: `Muted ${user.tag} for ${duration} minutes`
             });
-
         } catch (error) {
             console.error('Error muting user:', error);
-            await interaction.reply({
-                content: 'An error occurred while trying to mute the user.',
-                ephemeral: true
+            await interaction.editReply({
+                content: 'An error occurred while trying to mute the user.'
             });
         }
     }

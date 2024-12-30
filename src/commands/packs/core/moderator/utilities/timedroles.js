@@ -393,12 +393,13 @@ export const command = {
             
                                 if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
                                     await member.roles.add(role);
-                                    await db.logAction(
-                                        interaction.guildId,
-                                        'TIME_ROLE_ASSIGN',
-                                        member.id,
-                                        `Assigned ${role.name} after ${memberDays} days of membership (sync)`
-                                    );
+                                    await loggingService.logEvent(interaction.guild, 'ROLE_ADD', {
+                                        userId: member.id,
+                                        userTag: member.user.tag,
+                                        roleId: role.id,
+                                        roleName: role.name,
+                                        reason: `Time-based role received after ${memberDays} days`
+                                    });
                                     updated++;
                                 }
                             }

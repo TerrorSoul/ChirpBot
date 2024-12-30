@@ -90,7 +90,6 @@ async function updateDatabaseSchema() {
            }
        }
 
-       console.log('Database schema update completed');
    } catch (error) {
        console.error('Error updating database schema:', error);
    }
@@ -336,7 +335,7 @@ async function initDatabase() {
        await db.run('CREATE INDEX IF NOT EXISTS idx_botd_date ON block_of_the_day(shown_at)');
        await db.run(`CREATE INDEX IF NOT EXISTS idx_filtered_terms_guild ON filtered_terms(guild_id)`);
        await updateDatabaseSchema();
-       console.log('Database initialized');
+       console.log('Database ready');
    } catch (error) {
        console.error('Database initialization error:', error);
        process.exit(1);
@@ -443,7 +442,6 @@ const database = {
                 WHERE cp.is_core = 1 OR scp.enabled = 1
             `, [guildId]);
             
-            console.log(`Enabled packs for guild ${guildId}:`, enabledPacks);
             return enabledPacks;
         } catch (error) {
             console.error('Error getting enabled packs:', error);
@@ -471,8 +469,6 @@ const database = {
                 LEFT JOIN server_command_packs scp ON cp.id = scp.pack_id AND scp.guild_id = ?
                 WHERE cp.name = ?
             `, [guildId, packName]);
-
-            console.log(`Pack enable check for ${packName} in guild ${guildId}:`, result);
 
             // If pack is core or explicitly enabled (1)
             return result?.is_core === 1 || result?.enabled === 1;
@@ -730,9 +726,9 @@ const database = {
        );
    },
 
-   getReport: async (reportId) => {
-       return await db.get('SELECT * FROM reports WHERE id = ?', [reportId]);
-   },
+   getReport: async (messageId) => {
+        return await db.get('SELECT * FROM reports WHERE message_id = ?', [messageId]);
+    },
 
    getPendingReports: async (guildId) => {
        return await db.all(
@@ -741,16 +737,64 @@ const database = {
        );
    },
 
-   resolveReport: async (reportId, resolvedBy) => {
-       return await db.run(`
-           UPDATE reports 
-           SET status = 'RESOLVED', 
-               resolved_by = ?, 
-               resolved_at = CURRENT_TIMESTAMP 
-           WHERE id = ?`,
-           [resolvedBy, reportId]
-       );
-   },
+   hasActiveReports: async (userId, guildId) => {
+    const pendingReports = await db.get(`
+        SELECT COUNT(*) as count 
+        FROM reports 
+        WHERE guild_id = ? 
+        AND reported_user_id = ? 
+        AND status = 'PENDING'`, 
+        [guildId, userId]
+    );
+    return pendingReports.count > 0;
+},
+resolveReport: async (reportId, resolvedBy) => {
+    try {
+        console.log('Starting report resolution for message ID:', reportId);
+        await database.beginTransaction();
+
+        // Get report info before updating
+        const report = await db.get('SELECT reported_user_id, guild_id FROM reports WHERE message_id = ?', [reportId]);
+        console.log('Found report:', report);
+
+        // Update the report status
+        await db.run(`
+            UPDATE reports 
+            SET status = 'RESOLVED', 
+                resolved_by = ?, 
+                resolved_at = CURRENT_TIMESTAMP 
+            WHERE message_id = ?`,
+            [resolvedBy, reportId]
+        );
+
+        // Check remaining active reports for this user
+        const remainingReports = await db.get(`
+            SELECT COUNT(*) as count 
+            FROM reports 
+            WHERE guild_id = ? 
+            AND reported_user_id = ? 
+            AND status = 'PENDING'
+            AND message_id != ?`,
+            [report.guild_id, report.reported_user_id, reportId]
+        );
+        
+        console.log('Remaining active reports:', remainingReports.count);
+
+        await database.commitTransaction();
+        return {
+            success: true,
+            hasOtherActiveReports: remainingReports.count > 0,
+            reportedUserId: report.reported_user_id
+        };
+    } catch (error) {
+        await database.rollbackTransaction();
+        console.error('Error resolving report:', error);
+        return {
+            success: false,
+            error
+        };
+    }
+},
 
    deleteReport: async (reportId) => {
        return await db.run('DELETE FROM reports WHERE id = ?', [reportId]);
@@ -899,13 +943,59 @@ const database = {
 
    // Utility Functions
    clearExpiredWarnings: async () => {
-       return await db.run(
-           `DELETE FROM warnings 
-           WHERE expires_at IS NOT NULL 
-           AND expires_at < datetime('now')`
-       );
-   },
+        try {
+            // First get all warnings that are about to expire
+            const expiringWarnings = await db.all(`
+                SELECT w.*, g.log_channel_id 
+                FROM warnings w
+                JOIN server_settings g ON w.guild_id = g.guild_id
+                WHERE w.expires_at IS NOT NULL 
+                AND w.expires_at < datetime('now')
+            `);
 
+            // Group warnings by guild and user for logging
+            const warningsByGuildAndUser = expiringWarnings.reduce((acc, warning) => {
+                const key = `${warning.guild_id}-${warning.user_id}`;
+                if (!acc[key]) {
+                    acc[key] = {
+                        guildId: warning.guild_id,
+                        userId: warning.user_id,
+                        logChannelId: warning.log_channel_id,
+                        count: 0
+                    };
+                }
+                acc[key].count++;
+                return acc;
+            }, {});
+
+            // Delete the expired warnings
+            await db.run(`
+                DELETE FROM warnings 
+                WHERE expires_at IS NOT NULL 
+                AND expires_at < datetime('now')
+            `);
+
+            // Log for each affected user
+            for (const key of Object.keys(warningsByGuildAndUser)) {
+                const { guildId, userId, count } = warningsByGuildAndUser[key];
+                
+                const guild = await client.guilds.fetch(guildId).catch(() => null);
+                if (!guild) continue;
+
+                const user = await client.users.fetch(userId).catch(() => null);
+                if (!user) continue;
+
+                await loggingService.logEvent(guild, 'WARNINGS_EXPIRED', {
+                    userId: userId,
+                    userTag: user.tag,
+                    warningsExpired: count,
+                    reason: 'Warning(s) expired'
+                });
+            }
+        } catch (error) {
+            console.error('Error clearing expired warnings:', error);
+        }
+    },
    clearOldBackups: async (guildId, keepCount = 5) => {
        return await db.run(
            `DELETE FROM server_backups 

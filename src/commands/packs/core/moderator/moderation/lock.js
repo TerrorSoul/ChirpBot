@@ -1,6 +1,5 @@
 // commands/packs/core/moderator/moderation/lock.js
 import { ApplicationCommandOptionType } from 'discord.js';
-import { logAction } from '../../../../../utils/logging.js';
 
 export const command = {
     name: 'lock',
@@ -37,11 +36,6 @@ export const command = {
                 SendMessages: false,
                 SendMessagesInThreads: false
             });
-
-            // log
-            await logAction(interaction, 'CHANNEL_LOCK', 
-                `Channel: ${channel.name}\nReason: ${reason}`
-            );
 
             // notify moderator
             await interaction.reply({
