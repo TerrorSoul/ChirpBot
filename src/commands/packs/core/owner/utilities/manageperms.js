@@ -1,4 +1,3 @@
-// commands/packs/core/owner/utilities/manageperms.js
 import { ApplicationCommandType, ApplicationCommandOptionType, EmbedBuilder } from 'discord.js';
 import db from '../../../../../database/index.js';
 
@@ -38,9 +37,9 @@ export const command = {
     autocomplete: async (interaction) => {
         const focusedValue = interaction.options.getFocused().toLowerCase();
         
-        // Get all non-owner commands
+        // Get all non-owner/non-moderator commands
         const commandChoices = Array.from(interaction.client.commands.values())
-            .filter(cmd => cmd.permissionLevel !== 'owner')
+            .filter(cmd => !['owner', 'moderator'].includes(cmd.permissionLevel))
             .map(cmd => ({
                 name: `/${cmd.name} (${cmd.category || 'No Category'})`,
                 value: cmd.name
@@ -80,7 +79,7 @@ export const command = {
                     if (['fun', 'utilities'].includes(command)) {
                         await db.setChannelPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
-                            content: `✅ Added ${command} category permissions to ${channel}.`,
+                            content: `✅ Enabled ${command} category commands in ${channel}.\nMembers can now use these commands in this channel.`,
                             ephemeral: true
                         });
                     } else {
@@ -91,9 +90,15 @@ export const command = {
                                 ephemeral: true
                             });
                         }
+                        if (['owner', 'moderator'].includes(cmd.permissionLevel)) {
+                            return interaction.reply({
+                                content: 'Owner and moderator commands are always enabled in all channels.',
+                                ephemeral: true
+                            });
+                        }
                         await db.setChannelCommandPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
-                            content: `✅ Added permission for /${command} to ${channel}.`,
+                            content: `✅ Enabled /${command} in ${channel}.\nMembers can now use this command in this channel.`,
                             ephemeral: true
                         });
                     }
@@ -111,7 +116,7 @@ export const command = {
                     if (['fun', 'utilities'].includes(command)) {
                         await db.removeChannelPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
-                            content: `✅ Removed ${command} category permissions from ${channel}.`,
+                            content: `✅ Removed ${command} category permissions from ${channel}.\nMembers can no longer use these commands in this channel.`,
                             ephemeral: true
                         });
                     } else {
@@ -122,9 +127,15 @@ export const command = {
                                 ephemeral: true
                             });
                         }
+                        if (['owner', 'moderator'].includes(cmd.permissionLevel)) {
+                            return interaction.reply({
+                                content: 'Owner and moderator commands cannot be disabled.',
+                                ephemeral: true
+                            });
+                        }
                         await db.removeChannelCommandPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
-                            content: `✅ Removed permission for /${command} from ${channel}.`,
+                            content: `✅ Removed /${command} from ${channel}.\nMembers can no longer use this command in this channel.`,
                             ephemeral: true
                         });
                     }
@@ -141,7 +152,7 @@ export const command = {
 
                     await db.clearChannelPermissions(interaction.guildId, channel.id);
                     await interaction.reply({
-                        content: `✅ Cleared all permissions from ${channel}.`,
+                        content: `✅ Cleared all permissions from ${channel}.\nOnly moderators and the owner can use commands in this channel now.`,
                         ephemeral: true
                     });
                     break;
@@ -154,7 +165,8 @@ export const command = {
 
                         const embed = new EmbedBuilder()
                             .setTitle(`Channel Permissions - ${channel.name}`)
-                            .setColor('#00FF00');
+                            .setColor('#00FF00')
+                            .setDescription('Commands are disabled in all channels by default when channel restrictions are enabled.');
 
                         if (categories.length > 0) {
                             embed.addFields({
@@ -173,7 +185,11 @@ export const command = {
                         }
 
                         if (categories.length === 0 && commands.length === 0) {
-                            embed.setDescription('No permissions set for this channel.');
+                            embed.addFields({
+                                name: 'Current Status',
+                                value: 'No commands enabled in this channel. Only moderators and the owner can use commands here.',
+                                inline: false
+                            });
                         }
 
                         await interaction.reply({
@@ -184,7 +200,8 @@ export const command = {
                         const allPerms = await db.getAllChannelPermissions(interaction.guildId);
                         const embed = new EmbedBuilder()
                             .setTitle('Channel Permissions Overview')
-                            .setColor('#00FF00');
+                            .setColor('#00FF00')
+                            .setDescription('Commands are disabled in all channels by default when channel restrictions are enabled. Use `/manageperms add` to enable commands in specific channels.');
 
                         if (allPerms.length > 0) {
                             const channelGroups = allPerms.reduce((acc, perm) => {
@@ -219,7 +236,11 @@ export const command = {
                                 });
                             }
                         } else {
-                            embed.setDescription('No channel permissions set up.');
+                            embed.addFields({
+                                name: 'Current Status',
+                                value: 'No channel permissions set up. Only moderators and the owner can use commands in any channel.',
+                                inline: false
+                            });
                         }
 
                         await interaction.reply({

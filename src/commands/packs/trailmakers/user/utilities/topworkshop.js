@@ -93,7 +93,10 @@ export const command = {
 
             // Validate time range for the selected sort method
             if (!SORT_METHODS[sortMethod].supportsTimeRange && timeRange !== 'alltime') {
-                return await interaction.editReply('The selected sort method does not support time range filtering.');
+                return await interaction.editReply({
+                    content: 'The selected sort method does not support time range filtering.',
+                    ephemeral: true
+                });
             }
 
             // Construct base URL

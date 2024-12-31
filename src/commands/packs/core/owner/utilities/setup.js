@@ -428,7 +428,7 @@ async function quickSetup(interaction) {
     const spamProtection = interaction.options.getBoolean('spam_protection') ?? true;
     const spamThreshold = interaction.options.getInteger('spam_threshold') ?? 5;
     const spamInterval = interaction.options.getInteger('spam_interval') ?? 5;
-    const restrictChannels = interaction.options.getBoolean('restrict_channels') ?? false;
+    const restrictChannels = interaction.options.getBoolean('restrict_channels') ?? true;
     const contentFilterEnabled = interaction.options.getBoolean('content_filter') ?? true;
     const contentFilterNotify = interaction.options.getBoolean('content_filter_notify') ?? true;
     const contentFilterMessage = interaction.options.getString('content_filter_message') ?? 
@@ -753,7 +753,17 @@ Warning Threshold: ${settings.warning_threshold} warnings`,
 
     embed.addFields({
         name: 'Additional Configuration',
-        value: 'Use `/help` to see available commands\nUse `/reset` to completely reset bot configuration',
+        value: settings.channel_restrictions_enabled ? 
+            '• Channel Restrictions are **ENABLED**\n' +
+            '• All commands are disabled in channels by default\n' +
+            '• Use `/manageperms add` to enable specific commands in channels\n' +
+            '• Owner and moderator commands work in all channels\n\n' +
+            '• Use `/help` to see available commands\n' +
+            '• Use `/reset` to completely reset all settings' :
+            '• Channel Restrictions are **DISABLED**\n' +
+            '• Commands can be used in any channel\n\n' +
+            '• Use `/help` to see available commands\n' +
+            '• Use `/reset` to completely reset all settings',
         inline: false
     });
 
