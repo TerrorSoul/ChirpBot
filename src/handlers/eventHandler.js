@@ -935,33 +935,56 @@ export async function initHandlers(client) {
     // Handle guild join
     client.on('guildCreate', async (guild) => {
         console.log(`Joined new guild: ${guild.name}`);
+        
         try {
+            // Register core commands
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-            // Register core commands for the new guild
             const coreCommands = Array.from(client.guildCommands.values())
                 .filter(cmd => cmd.pack === 'core');  
+            
             console.log(`Registering ${coreCommands.length} core commands for new guild: ${guild.name}`);
             await rest.put(
                 Routes.applicationGuildCommands(client.user.id, guild.id),
                 { body: coreCommands }
             );
-            // Find a suitable channel to send welcome message
+    
+            // Get the user who invited the bot
+            const inviter = await guild.fetchAuditLogs({
+                type: 28, // BOT_ADD audit log type
+                limit: 1
+            }).then(audit => audit.entries.first()?.executor);
+    
+            // Create welcome embed
+            const embed = new EmbedBuilder()
+                .setTitle('Thanks for adding me!')
+                .setColor('#00FF00')
+                .setDescription(`To get started, please have the server owner run \`/setup\` in **${guild.name}**. This will enable all bot features and commands.`)
+                .addFields({
+                    name: 'Next Steps',
+                    value: '1. Run `/setup`\n2. Choose quick or manual setup\n3. Select desired command packs\n4. Configure server settings'
+                });
+    
+            if (inviter) {
+                try {
+                    // Try to DM the inviter
+                    await inviter.send({ embeds: [embed] });
+                    return;
+                } catch (error) {
+                    console.log('Could not DM inviter, falling back to channel message');
+                }
+            }
+    
+            // Fall back to channel message if can't DM or no inviter found
             const channel = guild.channels.cache
                 .find(channel => 
                     channel.type === ChannelType.GuildText && 
                     channel.permissionsFor(guild.members.me).has(['SendMessages', 'ViewChannel'])
                 );
+    
             if (channel) {
-                const embed = new EmbedBuilder()
-                    .setTitle('Thanks for adding me!')
-                    .setColor('#00FF00')
-                    .setDescription('To get started, please have the server owner run `/setup`. This will enable all bot features and commands.')
-                    .addFields({
-                        name: 'Next Steps',
-                        value: '1. Run `/setup`\n2. Choose quick or manual setup\n3. Select desired command packs\n4. Configure server settings'
-                    });
                 await channel.send({ embeds: [embed] });
             }
+    
         } catch (error) {
             console.error('Error setting up new guild:', error);
         }
