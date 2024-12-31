@@ -239,6 +239,7 @@ export async function initHandlers(client) {
                                 await member.roles.add(role);
                                 await loggingService.logEvent(guild, 'ROLE_ADD', {
                                     userId: member.id,
+                                    userTag: member.user.tag,
                                     roleId: role.id,
                                     roleName: role.name,
                                     userTag: member.user.tag,
@@ -296,6 +297,7 @@ export async function initHandlers(client) {
                         await member.roles.add(role);
                         await loggingService.logEvent(guild, 'ROLE_ADD', {
                             userId: member.id,
+                            userTag: member.user.tag,
                             roleId: role.id,
                             roleName: role.name,
                             userTag: member.user.tag,
@@ -386,9 +388,12 @@ export async function initHandlers(client) {
     client.on('messageUpdate', async (oldMessage, newMessage) => {
         if (oldMessage.author?.bot || !oldMessage.guild) return;
         if (oldMessage.content === newMessage.content) return;
+    
         await ensureGuildSettings(oldMessage.guild);
+        
         await loggingService.logEvent(oldMessage.guild, 'MESSAGE_EDIT', {
             userId: oldMessage.author.id,
+            userTag: oldMessage.author.tag,
             channelId: oldMessage.channel.id,
             messageId: oldMessage.id,
             oldContent: oldMessage.content,
@@ -399,13 +404,18 @@ export async function initHandlers(client) {
     // Message delete
     client.on('messageDelete', async (message) => {
         if (message.author?.bot || !message.guild || message.filterDeleted) return;
+    
         await ensureGuildSettings(message.guild);
+        
         await loggingService.logEvent(message.guild, 'MESSAGE_DELETE', {
             userId: message.author.id,
+            userTag: message.author.tag,
             channelId: message.channel.id,
             messageId: message.id,
             content: message.content,
-            attachments: message.attachments.map(a => a.url)
+            attachments: message.attachments.size > 0 ? 
+                Array.from(message.attachments.values()).map(a => a.url) : 
+                []
         });
     });
     // Voice state changes
@@ -413,29 +423,30 @@ export async function initHandlers(client) {
         try {
             const guild = oldState.guild || newState.guild;
             await ensureGuildSettings(guild);
+            
             // Join
             if (!oldState.channelId && newState.channelId) {
                 await loggingService.logEvent(guild, 'VOICE_JOIN', {
                     userId: newState.member.id,
-                    channelId: newState.channelId,
-                    userTag: newState.member.user.tag
+                    userTag: newState.member.user.tag,
+                    channelId: newState.channelId
                 });
             }
             // Leave
             else if (oldState.channelId && !newState.channelId) {
                 await loggingService.logEvent(guild, 'VOICE_LEAVE', {
                     userId: oldState.member.id,
-                    channelId: oldState.channelId,
-                    userTag: oldState.member.user.tag
+                    userTag: oldState.member.user.tag,
+                    channelId: oldState.channelId
                 });
             }
             // Move
             else if (oldState.channelId !== newState.channelId) {
                 await loggingService.logEvent(guild, 'VOICE_MOVE', {
                     userId: newState.member.id,
+                    userTag: newState.member.user.tag,
                     oldChannelId: oldState.channelId,
-                    newChannelId: newState.channelId,
-                    userTag: newState.member.user.tag
+                    newChannelId: newState.channelId
                 });
             }
         } catch (error) {
@@ -575,6 +586,7 @@ export async function initHandlers(client) {
                                 await member.roles.remove(otherId);
                                 await loggingService.logEvent(interaction.guild, 'ROLE_REMOVE', {
                                     userId: member.id,
+                                    userTag: member.user.tag,
                                     roleId: otherId,
                                     roleName: otherRole.name,
                                     reason: 'Single-select role message'
@@ -590,6 +602,7 @@ export async function initHandlers(client) {
                         });
                         await loggingService.logEvent(interaction.guild, 'ROLE_REMOVE', {
                             userId: member.id,
+                            userTag: member.user.tag,
                             roleId: roleId,
                             roleName: role.name,
                             reason: 'Role message selection'
@@ -602,6 +615,7 @@ export async function initHandlers(client) {
                         });
                         await loggingService.logEvent(interaction.guild, 'ROLE_ADD', {
                             userId: member.id,
+                            userTag: member.user.tag,
                             roleId: roleId,
                             roleName: role.name,
                             reason: 'Role message selection'
@@ -895,6 +909,7 @@ export async function initHandlers(client) {
                 await message.reply(warningMessage);
                 await loggingService.logEvent(message.guild, 'SPAM_WARNING', {
                     userId: message.author.id,
+                    userTag: message.author.tag,
                     warningCount: warningCount,
                     warningsLeft: warningsLeft,
                     channelId: message.channel.id
