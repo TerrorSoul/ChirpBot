@@ -109,12 +109,21 @@ export const command = {
                 components: [buttons]
             });
 
-            // Create report in database
+            // Create report in database and log the event
             await db.createReport({
                 guild_id: interaction.guildId,
                 reporter_id: interaction.user.id,
                 reported_user_id: user.id,
                 message_id: reportMessage.id,
+                type: 'USER',
+                reason: reason,
+                userTag: user.tag
+            });
+
+            await loggingService.logEvent(interaction.guild, 'REPORT_RECEIVED', {
+                userId: user.id,
+                userTag: user.tag,
+                reporterTag: interaction.user.tag,
                 type: 'USER',
                 reason: reason
             });
