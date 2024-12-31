@@ -196,11 +196,10 @@ export async function loadCommands(client) {
 
 async function canUseCommand(interaction, command) {
     if (command.global) return true;
-
     // Check pack enabled status
     if (command.pack) {
         const packEnabled = await db.isPackEnabled(interaction.guildId, command.pack);
-        
+       
         if (!packEnabled) {
             await interaction.reply({
                 content: `This command is part of the ${command.pack} pack which is not enabled on this server.`,
@@ -209,45 +208,47 @@ async function canUseCommand(interaction, command) {
             return false;
         }
     }
-
     // Get server settings to check if channel restrictions are enabled
     const settings = await db.getServerSettings(interaction.guildId);
     if (!settings?.channel_restrictions_enabled) return true;
-
     // Always allow owner, moderator and their commands anywhere
     const isOwner = interaction.guild.ownerId === interaction.user.id;
     const isModerator = settings?.mod_role_id && interaction.member.roles.cache.has(settings.mod_role_id);
     if (isOwner || isModerator || command.permissionLevel === 'owner' || command.permissionLevel === 'moderator') {
         return true;
     }
+    
+    // Always allow help and report commands anywhere
+    if (['help', 'report', 'Report Message'].includes(command.name)) {
+        return true;
+    }
 
     // Check channel permissions
     const channelPerms = await db.getChannelPermissions(interaction.guildId, interaction.channelId);
     const commandPerms = await db.getChannelCommandPermissions(interaction.guildId, interaction.channelId);
-
     // Default to denied unless explicitly allowed
     const allowedCategories = channelPerms.map(p => p.command_category);
     const allowedCommands = commandPerms.map(p => p.command_name);
-    
+   
     if (!allowedCategories.includes(command.category) && !allowedCommands.includes(command.name)) {
         const allPerms = await db.getAllChannelPermissions(interaction.guildId);
         const allowedChannels = allPerms
             .filter(p => p.command_category === command.category || p.command_name === command.name)
             .map(p => `<#${p.channel_id}>`)
             .filter((value, index, self) => self.indexOf(value) === index);
-        
+       
         let replyMessage = `This command can only be used in designated channels.`;
         if (allowedChannels.length > 0) {
             replyMessage += `\nYou can use this command in: ${allowedChannels.join(', ')}`;
         }
-        
+       
         await interaction.reply({
             content: replyMessage,
             ephemeral: true
         });
         return false;
     }
-    
+   
     return true;
 }
 
