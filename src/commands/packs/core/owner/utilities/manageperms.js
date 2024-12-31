@@ -34,6 +34,34 @@ export const command = {
             autocomplete: true
         }
     ],
+
+    autocomplete: async (interaction) => {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        
+        // Get all non-owner commands
+        const commandChoices = Array.from(interaction.client.commands.values())
+            .filter(cmd => cmd.permissionLevel !== 'owner')
+            .map(cmd => ({
+                name: `/${cmd.name} (${cmd.category || 'No Category'})`,
+                value: cmd.name
+            }));
+
+        // Add categories
+        const categoryChoices = [
+            { name: '📁 fun (Category)', value: 'fun' },
+            { name: '📁 utilities (Category)', value: 'utilities' }
+        ];
+
+        // Combine and filter all choices
+        const allChoices = [...categoryChoices, ...commandChoices];
+        const filtered = allChoices.filter(choice => 
+            choice.name.toLowerCase().includes(focusedValue) ||
+            choice.value.toLowerCase().includes(focusedValue)
+        );
+
+        await interaction.respond(filtered.slice(0, 25));
+    },
+
     execute: async (interaction) => {
         const action = interaction.options.getString('action');
         const channel = interaction.options.getChannel('channel');
@@ -56,6 +84,13 @@ export const command = {
                             ephemeral: true
                         });
                     } else {
+                        const cmd = interaction.client.commands.get(command);
+                        if (!cmd) {
+                            return interaction.reply({
+                                content: 'Command not found.',
+                                ephemeral: true
+                            });
+                        }
                         await db.setChannelCommandPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
                             content: `✅ Added permission for /${command} to ${channel}.`,
@@ -80,6 +115,13 @@ export const command = {
                             ephemeral: true
                         });
                     } else {
+                        const cmd = interaction.client.commands.get(command);
+                        if (!cmd) {
+                            return interaction.reply({
+                                content: 'Command not found.',
+                                ephemeral: true
+                            });
+                        }
                         await db.removeChannelCommandPermission(interaction.guildId, channel.id, command);
                         await interaction.reply({
                             content: `✅ Removed permission for /${command} from ${channel}.`,

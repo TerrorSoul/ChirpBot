@@ -1,7 +1,7 @@
 // eventHandler.js
 import { loadCommands, handleCommand } from './commandHandler.js';
 import { initMistral } from '../services/mistralService.js';
-import { EmbedBuilder, ChannelType, REST, Routes } from 'discord.js';
+import { EmbedBuilder, ChannelType, REST, Routes, ActivityType } from 'discord.js';
 import { checkMessage } from '../utils/contentFilter.js';
 import { initializeDomainLists } from '../utils/filterCache.js';
 import { loggingService } from '../utils/loggingService.js';
@@ -130,7 +130,55 @@ export async function initHandlers(client) {
     // Wait for client to be ready before registering commands
     client.once('ready', async () => {
         console.log(`Logged in as ${client.user.tag}!`);
+        const getStatuses = (client) => [
+            // Watching activities - observatory/monitoring themed
+            { name: `over ${client.guilds.cache.size} flocks`, type: ActivityType.Watching },
+            { name: 'for birds causing trouble', type: ActivityType.Watching },
+            { name: 'the nest for intruders', type: ActivityType.Watching },
+            { name: 'migration patterns', type: ActivityType.Watching },
+            { name: 'for sneaky pigeons', type: ActivityType.Watching },
+            { name: 'birds steal french fries', type: ActivityType.Watching },
         
+            // Listening activities - sound-based themes
+            { name: 'morning bird calls', type: ActivityType.Listening },
+            { name: 'nest reports', type: ActivityType.Listening },
+            { name: 'flock communications', type: ActivityType.Listening },
+            { name: 'distress signals', type: ActivityType.Listening },
+            { name: 'gossip from the birdfeeder', type: ActivityType.Listening },
+            { name: 'tweets (the bird kind)', type: ActivityType.Listening },
+            { name: 'seagulls plot chaos', type: ActivityType.Listening },
+        
+            // Playing activities - active/fun themes
+            { name: 'hide and tweet', type: ActivityType.Playing },
+            { name: 'capture the worm', type: ActivityType.Playing },
+            { name: 'nest defense simulator', type: ActivityType.Playing },
+            { name: 'chicken or duck?', type: ActivityType.Playing },
+            { name: 'hot potato with eggs', type: ActivityType.Playing },
+            { name: 'bird brain trivia', type: ActivityType.Playing },
+            { name: 'angry birds IRL', type: ActivityType.Playing },
+            { name: 'operation breadcrumb', type: ActivityType.Playing },
+            { name: 'duck duck NO GOOSE', type: ActivityType.Playing }
+        ];
+        
+        let statusIndex = 0;
+        
+        // Rotate statuses every minute
+        setInterval(() => {
+            const statuses = getStatuses(client); // Get fresh statuses with updated guild count
+            const status = statuses[statusIndex];
+            client.user.setPresence({
+                activities: [status],
+                status: 'online'
+            });
+            statusIndex = (statusIndex + 1) % statuses.length;
+        }, 120000);
+        
+        // Set initial status
+        client.user.setPresence({
+            activities: [getStatuses(client)[0]],
+            status: 'online'
+        });
+
         try {
             await initializeDomainLists();
             await loadCommands(client);
@@ -750,7 +798,17 @@ export async function initHandlers(client) {
         }
         // Autocomplete handling
         else if (interaction.isAutocomplete()) {
-            if (interaction.commandName === 'setup') {
+            const command = client.commands.get(interaction.commandName);
+        
+            if (command?.autocomplete) {
+                try {
+                    await command.autocomplete(interaction);
+                } catch (error) {
+                    console.error(`Error handling autocomplete for ${interaction.commandName}:`, error);
+                    await interaction.respond([]);
+                }
+            }
+            else if (interaction.commandName === 'setup') {
                 if (interaction.options.getFocused(true).name === 'command_packs') {
                     try {
                         const packs = await db.getAllPacks();
