@@ -515,12 +515,24 @@ class LoggingService {
                 embed
                     .setColor('#FFA500')
                     .setTitle('Message Edited')
-                    .setDescription(`Message edited in <#${data.channelId}>`)
+                    .setDescription(`Message edited in <#${data.channelId}> [Jump to Message](${data.messageUrl})`)
                     .addFields(
-                        { name: 'Before', value: data.oldContent || 'Unknown' },
-                        { name: 'After', value: data.newContent },
-                        { name: 'Message ID', value: data.messageId }
-                    );
+                        { 
+                            name: 'Before', 
+                            value: data.oldContent?.length > 1024 ? 
+                                data.oldContent.substring(0, 1021) + '...' : 
+                                data.oldContent || 'Unknown',
+                            inline: false 
+                        },
+                        { 
+                            name: 'After', 
+                            value: data.newContent?.length > 1024 ? 
+                                data.newContent.substring(0, 1021) + '...' : 
+                                data.newContent || 'Unknown',
+                            inline: false 
+                        }
+                    )
+                    .setTimestamp();
                 break;
 
             case 'MESSAGE_DELETE':
@@ -529,8 +541,21 @@ class LoggingService {
                     .setTitle('Message Deleted')
                     .setDescription(`Message deleted in <#${data.channelId}>`)
                     .addFields(
-                        { name: 'Content', value: data.content || 'Unknown' }
+                        { 
+                            name: 'Content', 
+                            value: data.content?.length > 1024 ? 
+                                data.content.substring(0, 1021) + '...' : 
+                                data.content || 'Unknown',
+                            inline: false 
+                        }
                     );
+                
+                if (data.attachments?.length > 0) {
+                    embed.addFields({
+                        name: 'Attachments',
+                        value: data.attachments.join('\n')
+                    });
+                }
                 break;
 
             case 'MESSAGE_FILTER_DELETE':
