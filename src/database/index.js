@@ -320,6 +320,39 @@ async function initDatabase() {
             )
         `);
 
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                channel_id TEXT,
+                thread_id TEXT,
+                status TEXT DEFAULT 'OPEN',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                closed_at TIMESTAMP,
+                closed_by TEXT
+            )`);
+        
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                author_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+            )`);
+        
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS blocked_ticket_users (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                blocked_by TEXT NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (guild_id, user_id)
+            )`);
+
        // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_welcome_history_guild ON welcome_message_history(guild_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_command_packs_name ON command_packs(name)`);
@@ -334,6 +367,12 @@ async function initDatabase() {
        await db.run(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(reported_user_id)`);
        await db.run('CREATE INDEX IF NOT EXISTS idx_botd_date ON block_of_the_day(shown_at)');
        await db.run(`CREATE INDEX IF NOT EXISTS idx_filtered_terms_guild ON filtered_terms(guild_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_guild ON tickets(guild_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_channel ON tickets(channel_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_thread ON tickets(thread_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_messages ON ticket_messages(ticket_id)`);
+
        await updateDatabaseSchema();
        console.log('Database ready');
    } catch (error) {
@@ -1304,6 +1343,111 @@ resolveReport: async (reportId, resolvedBy) => {
             await database.rollbackTransaction();
             throw error;
         }
+    },
+
+    getActiveUserTickets: async (userId) => {
+        return await db.all(`
+            SELECT * FROM tickets 
+            WHERE user_id = ? AND status = 'OPEN'
+            ORDER BY created_at DESC`,
+            [userId]
+        );
+    },
+    
+    getTicket: async (channelOrThreadId) => {
+        return await db.get(`
+            SELECT * FROM tickets 
+            WHERE channel_id = ? OR thread_id = ?`,
+            [channelOrThreadId, channelOrThreadId]
+        );
+    },
+    
+    getLatestTicket: async (userId) => {
+        return await db.get(`
+            SELECT * FROM tickets 
+            WHERE user_id = ? AND status = 'OPEN'
+            ORDER BY created_at DESC 
+            LIMIT 1`,
+            [userId]
+        );
+    },
+    
+    createTicket: async (guildId, userId, channelId, threadId = null) => {
+        return await db.run(`
+            INSERT INTO tickets (guild_id, user_id, channel_id, thread_id)
+            VALUES (?, ?, ?, ?)`,
+            [guildId, userId, channelId, threadId]
+        );
+    },
+    
+    addTicketMessage: async (ticketId, authorId, content) => {
+        return await db.run(`
+            INSERT INTO ticket_messages (ticket_id, author_id, content)
+            VALUES (?, ?, ?)`,
+            [ticketId, authorId, content]
+        );
+    },
+    
+    closeTicket: async (ticketId, closedBy) => {
+        return await db.run(`
+            UPDATE tickets 
+            SET status = 'CLOSED', 
+                closed_at = CURRENT_TIMESTAMP, 
+                closed_by = ?
+            WHERE id = ?`,
+            [closedBy, ticketId]
+        );
+    },
+    
+    isUserBlocked: async (guildId, userId) => {
+        const result = await db.get(`
+            SELECT 1 FROM blocked_ticket_users 
+            WHERE guild_id = ? AND user_id = ?`,
+            [guildId, userId]
+        );
+        return !!result;
+    },
+    
+    blockUser: async (guildId, userId, blockedBy, reason) => {
+        return await db.run(`
+            INSERT OR REPLACE INTO blocked_ticket_users 
+            (guild_id, user_id, blocked_by, reason)
+            VALUES (?, ?, ?, ?)`,
+            [guildId, userId, blockedBy, reason]
+        );
+    },
+    
+    unblockUser: async (guildId, userId) => {
+        return await db.run(`
+            DELETE FROM blocked_ticket_users
+            WHERE guild_id = ? AND user_id = ?`,
+            [guildId, userId]
+        );
+    },
+    
+    getRecentTickets: async (guildId, userId) => {
+        return await db.all(`
+            SELECT * FROM tickets 
+            WHERE guild_id = ? AND user_id = ? 
+            AND created_at > datetime('now', '-1 day')`,
+            [guildId, userId]
+        );
+    },
+
+    getAllUserTickets: async (guildId, userId) => {
+        return await db.all(`
+            SELECT * FROM tickets 
+            WHERE guild_id = ? AND user_id = ?`,
+            [guildId, userId]
+        );
+    },
+    
+    wipeUserTickets: async (guildId, userId) => {
+        return await db.run(`
+            DELETE FROM tickets 
+            WHERE guild_id = ? AND user_id = ?`,
+            [guildId, userId]
+        );
     }
 };
 

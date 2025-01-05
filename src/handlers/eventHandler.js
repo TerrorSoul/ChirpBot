@@ -6,6 +6,7 @@ import { checkMessage } from '../utils/contentFilter.js';
 import { initializeDomainLists } from '../utils/filterCache.js';
 import { loggingService } from '../utils/loggingService.js';
 import { checkModeratorRole } from '../utils/permissions.js';
+import { handleTicketReply } from '../utils/ticketService.js';
 import db from '../database/index.js';
 import path from 'path';
 import fs from 'fs';
@@ -242,7 +243,6 @@ export async function initHandlers(client) {
                                     userTag: member.user.tag,
                                     roleId: role.id,
                                     roleName: role.name,
-                                    userTag: member.user.tag,
                                     reason: 'Welcome role'
                                 });
                             }
@@ -370,6 +370,7 @@ export async function initHandlers(client) {
                                         userId: member.id,
                                         roleId: role.id,
                                         roleName: role.name,
+                                        userTag: member.user.tag,  // Add this line
                                         reason: `Time-based role after ${memberDays} days`
                                     });
                                 }
@@ -863,40 +864,73 @@ export async function initHandlers(client) {
             }
         }
     });
-    // Handle new messages for content filtering and spam protection
+    // Handle new messages for content filtering and spam protection and ticketing
     client.on('messageCreate', async (message) => {
-        // Ignore bot messages and DMs
-        if (message.author.bot || !message.guild) return;
         try {
+            // Handle ticket replies
+            if (!message.author.bot) {
+                console.log('Checking message for ticket reply:', {
+                    channelName: message.channel.name,
+                    channelType: message.channel.type,
+                    parentName: message.channel.parent?.name
+                });
+     
+                // For forum tickets
+                if (message.channel.isThread() && 
+                    message.channel.parent?.name.toLowerCase() === 'tickets') {
+                    console.log('Processing ticket reply in thread');
+                    await handleTicketReply(null, message);
+                    return;
+                }
+                
+                // For category-based tickets
+                if (message.channel.type === ChannelType.GuildText && 
+                    message.channel.parent?.name === 'Tickets') {
+                    console.log('Processing ticket reply in channel');
+                    await handleTicketReply(null, message);
+                    return;
+                }
+            }
+     
+            // Ignore bot messages and DMs
+            if (message.author.bot || !message.guild) return;
+     
             // Content filter check first
             const wasFiltered = await checkMessage(message);
             if (wasFiltered) {
                 return;  // checkMessage already handles the logging
             }
+     
             const settings = await db.getServerSettings(message.guild.id);
             if (!settings?.spam_protection) return;
+     
             // Check if user has moderator role or is owner (exempt from spam check)
             if (message.guild.ownerId === message.author.id ||
                 (settings.mod_role_id && message.member.roles.cache.has(settings.mod_role_id))) {
                 return;
             }
+     
             const spamThreshold = settings.spam_threshold || 5;
-            const spamInterval = settings.spam_interval || 5000; // 5 seconds
+            const spamInterval = settings.spam_interval || 5000;
+     
             const warnings = await db.getSpamWarnings(message.guild.id, message.author.id);
             const recentMessages = await message.channel.messages.fetch({
                 limit: spamThreshold,
                 before: message.id
             });
+     
             const userMessages = recentMessages.filter(msg =>
                 msg.author.id === message.author.id &&
                 message.createdTimestamp - msg.createdTimestamp <= spamInterval
             );
+     
             if (userMessages.size >= spamThreshold - 1) {
-                // User is spamming
                 const warningCount = warnings ? warnings.warning_count + 1 : 1;
                 await db.addSpamWarning(message.guild.id, message.author.id);
+     
                 const warningsLeft = (settings.warning_threshold + 1) - warningCount;
                 let warningMessage;
+     
                 if (warningsLeft === 1) {
                     warningMessage = settings.spam_warning_message
                         .replace('{warnings}', 'This is your last warning')
@@ -906,7 +940,9 @@ export async function initHandlers(client) {
                         .replace('{warnings}', `${warningsLeft} warnings remaining`)
                         .replace('{user}', message.author.toString());
                 }
+     
                 await message.reply(warningMessage);
+     
                 await loggingService.logEvent(message.guild, 'SPAM_WARNING', {
                     userId: message.author.id,
                     userTag: message.author.tag,
@@ -914,16 +950,17 @@ export async function initHandlers(client) {
                     warningsLeft: warningsLeft,
                     channelId: message.channel.id
                 });
-                // If user has exceeded warning threshold, ban them
+     
                 if (warningCount > settings.warning_threshold) {
                     try {
                         await message.member.ban({
                             reason: `Exceeded spam warning threshold (${settings.warning_threshold})`
                         });
+     
                         await loggingService.logEvent(message.guild, 'BAN', {
                             userId: message.author.id,
                             userTag: message.author.tag,
-                            modTag: message.client.user.tag,  // Bot as moderator
+                            modTag: message.client.user.tag,
                             reason: `Auto-banned: Exceeded warning threshold (${warningCount}/${settings.warning_threshold})`,
                             deleteMessageDays: 1,
                             warningCount: warningCount,
@@ -937,7 +974,7 @@ export async function initHandlers(client) {
         } catch (error) {
             console.error('Error in message handler:', error);
         }
-    });
+     });
     // Handle command reloading
     client.on('reloadCommands', async () => {
         try {

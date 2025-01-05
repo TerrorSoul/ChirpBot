@@ -353,69 +353,155 @@ export const command = {
     }
 };
 async function createLogChannel(guild, modRole) {
-    // Determine channel type based on server features
-    const isCommunityServer = guild.features.includes('COMMUNITY');
-    const channelType = isCommunityServer ? ChannelType.GuildForum : ChannelType.GuildText;
+    try {
+        // Force refresh guild to get current features
+        guild = await guild.fetch();
+        
+        // Determine channel type based on server features
+        const isCommunityServer = guild.features.includes('COMMUNITY');
+        let channelType = isCommunityServer ? ChannelType.GuildForum : ChannelType.GuildText;
+        
+        console.log(`Creating ${isCommunityServer ? 'forum' : 'text'} channel for logging`);
+        
+        try {
+            // Create the channel
+            const logChannel = await guild.channels.create({
+                name: 'logs',
+                type: channelType,
+                permissionOverwrites: [
+                    {
+                        id: guild.id,
+                        deny: ['ViewChannel']
+                    },
+                    {
+                        id: modRole.id,
+                        allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
+                    },
+                    {
+                        id: guild.client.user.id,
+                        allow: [
+                            'ViewChannel',
+                            'SendMessages',
+                            'EmbedLinks',
+                            'ReadMessageHistory',
+                            'ManageThreads',
+                            'CreatePublicThreads'
+                        ]
+                    }
+                ],
+                reason: 'Bot setup - logging channel'
+            });
 
-    console.log(`Creating ${isCommunityServer ? 'forum' : 'text'} channel for logging`);
+            // Initial delay after channel creation
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Create the channel
-    const logChannel = await guild.channels.create({
-        name: 'logs',
-        type: channelType,
-        permissionOverwrites: [
-            {
-                id: guild.id,
-                deny: ['ViewChannel']
-            },
-            {
-                id: modRole.id,
-                allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
-            },
-            {
-                id: guild.client.user.id,
-                allow: [
-                    'ViewChannel',
-                    'SendMessages',
-                    'EmbedLinks',
-                    'ReadMessageHistory',
-                    'ManageThreads',
-                    'CreatePublicThreads'
-                ]
+            // Verify channel exists after initial creation
+            let verifiedChannel = await guild.channels.fetch(logChannel.id);
+
+            // If it's a forum channel, initialize tags
+            if (channelType === ChannelType.GuildForum) {
+                try {
+                    // Additional delay before setting tags
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    await verifiedChannel.setAvailableTags([
+                        { name: 'Log', moderated: true },
+                        { name: 'Banned', moderated: true },
+                        { name: 'Muted', moderated: true },
+                        { name: 'Reported', moderated: true }
+                    ]);
+
+                    // Final delay after setting tags
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    // Final verification after all operations
+                    verifiedChannel = await guild.channels.fetch(logChannel.id);
+                } catch (tagError) {
+                    console.error('Error setting forum tags:', tagError);
+                    // If setting tags fails, delete the forum channel and create a text channel instead
+                    await verifiedChannel.delete().catch(console.error);
+                    
+                    console.log('Falling back to text channel creation');
+                    const textChannel = await guild.channels.create({
+                        name: 'logs',
+                        type: ChannelType.GuildText,
+                        permissionOverwrites: [
+                            {
+                                id: guild.id,
+                                deny: ['ViewChannel']
+                            },
+                            {
+                                id: modRole.id,
+                                allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
+                            },
+                            {
+                                id: guild.client.user.id,
+                                allow: [
+                                    'ViewChannel',
+                                    'SendMessages',
+                                    'EmbedLinks',
+                                    'ReadMessageHistory',
+                                    'ManageThreads',
+                                    'CreatePublicThreads'
+                                ]
+                            }
+                        ],
+                        reason: 'Bot setup - logging channel (fallback)'
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    verifiedChannel = await guild.channels.fetch(textChannel.id);
+                }
             }
-        ],
-        reason: 'Bot setup - logging channel'
-    });
 
-    // Initial delay after channel creation
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Verify channel exists after initial creation
-    let verifiedChannel = await guild.channels.fetch(logChannel.id);
-
-    // If it's a forum channel, initialize tags
-    if (isCommunityServer) {
-        // Additional delay before setting tags
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        await verifiedChannel.setAvailableTags([
-            { name: 'Log', moderated: true },
-            { name: 'Banned', moderated: true },
-            { name: 'Muted', moderated: true },
-            { name: 'Reported', moderated: true }
-        ]).catch(err => {
-            console.error('Error setting forum tags:', err);
-        });
-
-        // Final delay after setting tags
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Final verification after all operations
-        verifiedChannel = await guild.channels.fetch(logChannel.id);
+            console.log(`Created channel ${verifiedChannel.name} (${verifiedChannel.id})`);
+            return verifiedChannel;
+            
+        } catch (channelError) {
+            console.error('Error creating initial channel:', channelError);
+            
+            // If forum creation fails, try creating a text channel
+            if (channelType === ChannelType.GuildForum) {
+                console.log('Falling back to text channel creation');
+                const textChannel = await guild.channels.create({
+                    name: 'logs',
+                    type: ChannelType.GuildText,
+                    permissionOverwrites: [
+                        {
+                            id: guild.id,
+                            deny: ['ViewChannel']
+                        },
+                        {
+                            id: modRole.id,
+                            allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
+                        },
+                        {
+                            id: guild.client.user.id,
+                            allow: [
+                                'ViewChannel',
+                                'SendMessages',
+                                'EmbedLinks',
+                                'ReadMessageHistory',
+                                'ManageThreads',
+                                'CreatePublicThreads'
+                            ]
+                        }
+                    ],
+                    reason: 'Bot setup - logging channel (fallback)'
+                });
+                
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                const verifiedChannel = await guild.channels.fetch(textChannel.id);
+                
+                console.log(`Created text channel ${verifiedChannel.name} (${verifiedChannel.id})`);
+                return verifiedChannel;
+            }
+            throw channelError;
+        }
+    } catch (error) {
+        console.error('Fatal error in createLogChannel:', error);
+        throw error;
     }
-
-    console.log(`Created channel ${verifiedChannel.name} (${verifiedChannel.id})`);
-    return verifiedChannel;
 }
 
 async function quickSetup(interaction) {
