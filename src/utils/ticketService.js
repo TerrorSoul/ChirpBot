@@ -176,6 +176,17 @@ export async function handleTicketCreate(interaction) {
 
         await interaction.deferReply({ ephemeral: true });
 
+        // Create the ticket embed
+        const embed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setAuthor({
+                name: interaction.user.tag,
+                iconURL: interaction.user.displayAvatarURL()
+            })
+            .setDescription(message)
+            .setTimestamp()
+            .setFooter({ text: `User ID: ${interaction.user.id}` });
+
         // Get or create ticket system
         const ticketSystem = await getOrCreateTicketSystem(guild);
         const settings = await db.getServerSettings(guild.id);
@@ -183,27 +194,18 @@ export async function handleTicketCreate(interaction) {
         if (ticketSystem.type === 'forum') {
             const thread = await ticketSystem.channel.threads.create({
                 name: `Ticket-${interaction.user.tag}`,
+                message: { embeds: [embed] },
                 autoArchiveDuration: ThreadAutoArchiveDuration.ThreeDays,
                 reason: `Ticket from ${interaction.user.tag}`
             });
 
-            const embed = new EmbedBuilder()
-                .setColor(0x0099FF)
-                .setAuthor({
-                    name: interaction.user.tag,
-                    iconURL: interaction.user.displayAvatarURL()
-                })
-                .setDescription(message)
-                .setTimestamp()
-                .setFooter({ text: `User ID: ${interaction.user.id}` });
-
-            await thread.send({ embeds: [embed] });
             const ticket = await db.createTicket(
                 guild.id, 
                 interaction.user.id, 
-                ticketSystem.channel.id,  // forum channel ID
-                thread.id  // thread ID
+                ticketSystem.channel.id,
+                thread.id
             );
+
             await db.addTicketMessage(ticket.lastID, interaction.user.id, message);
 
             await loggingService.logEvent(guild, 'TICKET_CREATED', {
@@ -217,6 +219,7 @@ export async function handleTicketCreate(interaction) {
             await interaction.editReply({
                 content: `Ticket #${ticket.lastID} created successfully. I'll notify you here when you receive a response.`
             });
+
         } else {
             const ticketChannel = await guild.channels.create({
                 name: `ticket-${Date.now().toString(36)}`,
@@ -255,11 +258,11 @@ export async function handleTicketCreate(interaction) {
             const ticket = await db.createTicket(
                 guild.id, 
                 interaction.user.id, 
-                ticketChannel.id,  // channel ID
-                null  // no thread ID for regular channels
+                ticketChannel.id,
+                null
             );
 
-            const embed = new EmbedBuilder()
+            const channelEmbed = new EmbedBuilder()
                 .setColor(0x0099FF)
                 .setAuthor({
                     name: interaction.user.tag,
@@ -270,7 +273,7 @@ export async function handleTicketCreate(interaction) {
                 .setTimestamp()
                 .setFooter({ text: `User ID: ${interaction.user.id}` });
 
-            await ticketChannel.send({ embeds: [embed] });
+            await ticketChannel.send({ embeds: [channelEmbed] });
             await ticketChannel.setName(`ticket-${ticket.lastID}`);
             await db.addTicketMessage(ticket.lastID, interaction.user.id, message);
 
@@ -319,18 +322,38 @@ export async function handleTicketReply(interaction, message = null) {
 
             // Send reply to ticket channel/thread
             const guild = interaction.client.guilds.cache.get(ticket.guild_id);
-            const channel = await guild.channels.fetch(ticket.channel_id);
             
-            const embed = new EmbedBuilder()
-                .setColor(0x0099FF)
-                .setAuthor({
-                    name: interaction.user.tag,
-                    iconURL: interaction.user.displayAvatarURL()
-                })
-                .setDescription(content)
-                .setTimestamp();
+            // Fixed section - properly handle thread vs channel tickets
+            if (ticket.thread_id) {
+                // For forum-based tickets with threads
+                const forumChannel = await guild.channels.fetch(ticket.channel_id);
+                const thread = await forumChannel.threads.fetch(ticket.thread_id);
+                
+                const embed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setAuthor({
+                        name: interaction.user.tag,
+                        iconURL: interaction.user.displayAvatarURL()
+                    })
+                    .setDescription(content)
+                    .setTimestamp();
 
-            await channel.send({ embeds: [embed] });
+                await thread.send({ embeds: [embed] });
+            } else {
+                // For category-based tickets with regular channels
+                const channel = await guild.channels.fetch(ticket.channel_id);
+                
+                const embed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setAuthor({
+                        name: interaction.user.tag,
+                        iconURL: interaction.user.displayAvatarURL()
+                    })
+                    .setDescription(content)
+                    .setTimestamp();
+
+                await channel.send({ embeds: [embed] });
+            }
 
             return interaction.reply({
                 content: `Reply sent to ticket #${ticket.id}.`,
@@ -357,42 +380,40 @@ export async function handleTicketReply(interaction, message = null) {
             await db.addTicketMessage(ticket.id, message.author.id, message.content);
 
             // Send DM if the reply is from someone other than the ticket creator
-            ///if (message.author.id !== ticket.user_id) {
-                console.log('Sending DM - Author is not ticket creator:', {
-                    authorId: message.author.id,
-                    ticketUserId: ticket.user_id
-                });
+            console.log('Sending DM - Author is not ticket creator:', {
+                authorId: message.author.id,
+                ticketUserId: ticket.user_id
+            });
 
-                try {
-                    const ticketUser = await message.client.users.fetch(ticket.user_id);
-                    console.log('Found ticket user:', ticketUser.tag);
+            try {
+                const ticketUser = await message.client.users.fetch(ticket.user_id);
+                console.log('Found ticket user:', ticketUser.tag);
 
-                    const embed = new EmbedBuilder()
-                        .setColor(0x0099FF)
-                        .setTitle(`New Reply to Ticket #${ticket.id}`)
-                        .setDescription(message.content)
-                        .setAuthor({
-                            name: message.author.tag,
-                            iconURL: message.author.displayAvatarURL()
-                        })
-                        .setTimestamp();
+                const embed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setTitle(`New Reply to Ticket #${ticket.id}`)
+                    .setDescription(message.content)
+                    .setAuthor({
+                        name: message.author.tag,
+                        iconURL: message.author.displayAvatarURL()
+                    })
+                    .setTimestamp();
 
-                    if (message.attachments.size > 0) {
-                        embed.addFields({
-                            name: 'Attachments',
-                            value: message.attachments.map(a => a.url).join('\n')
-                        });
-                    }
-
-                    await ticketUser.send({ embeds: [embed] });
-                    console.log('Successfully sent DM to ticket creator');
-                } catch (error) {
-                    console.error('Error sending ticket reply DM:', error);
-                    await message.reply('⚠️ Unable to send notification to the ticket creator.');
+                if (message.attachments.size > 0) {
+                    embed.addFields({
+                        name: 'Attachments',
+                        value: message.attachments.map(a => a.url).join('\n')
+                    });
                 }
-            //} else {
-                console.log('Skipping DM - Author is ticket creator');
-            //}
+
+                await ticketUser.send({ embeds: [embed] });
+                console.log('Successfully sent DM to ticket creator');
+            } catch (error) {
+                console.error('Error sending ticket reply DM:', error);
+                await message.reply('⚠️ Unable to send notification to the ticket creator.');
+            }
+            
+            console.log('Skipping DM - Author is ticket creator');
         }
 
     } catch (error) {
@@ -544,41 +565,57 @@ export async function closeTicket(ticket, userId, reason, client) {
         const guild = client.guilds.cache.get(ticket.guild_id);
         if (!guild) return;
 
-        const channel = await guild.channels.fetch(ticket.channel_id);
-        if (!channel) return;
-
-        const embed = new EmbedBuilder()
+        const closeEmbed = new EmbedBuilder()
             .setColor(0xFF0000)
             .setTitle('Ticket Closed')
             .setDescription(`Reason: ${reason}`)
             .setTimestamp();
 
-        await channel.send({ embeds: [embed] });
-
-        if (channel.type === ChannelType.PublicThread) {
-            await channel.setLocked(true);
-            await channel.setArchived(true);
+        // Handle thread vs channel differently
+        if (ticket.thread_id) {
+            const forumChannel = await guild.channels.fetch(ticket.channel_id);
+            const thread = await forumChannel.threads.fetch(ticket.thread_id);
+            
+            await thread.send({ embeds: [closeEmbed] });
+            
+            // Lock thread immediately
+            await thread.setLocked(true);
+            
+            // Give users a moment to read the closure message, then delete
+            setTimeout(async () => {
+                try {
+                    await thread.delete();
+                } catch (error) {
+                    console.error('Error deleting ticket thread:', error);
+                    // Fall back to archiving if deletion fails
+                    await thread.setArchived(true);
+                }
+            }, 1 * 60 * 1000); // 1 minute delay
         } else {
-            // Give 5 minutes to read the close message before deleting
+            const channel = await guild.channels.fetch(ticket.channel_id);
+            
+            await channel.send({ embeds: [closeEmbed] });
+            
+            // Give 1 minute to read the close message before deleting
             setTimeout(async () => {
                 try {
                     await channel.delete();
                 } catch (error) {
                     console.error('Error deleting ticket channel:', error);
                 }
-            }, 5 * 60 * 1000);
+            }, 1 * 60 * 1000);
         }
 
         // Notify user via DM
         try {
             const user = await client.users.fetch(ticket.user_id);
-            const closeEmbed = new EmbedBuilder()
+            const userEmbed = new EmbedBuilder()
                 .setColor(0xFF0000)
                 .setTitle(`Ticket #${ticket.id} Closed`)
                 .setDescription(reason)
                 .setTimestamp();
 
-            await user.send({ embeds: [closeEmbed] });
+            await user.send({ embeds: [userEmbed] });
         } catch (error) {
             console.error('Error sending ticket close notification:', error);
         }
@@ -596,10 +633,20 @@ export async function closeTicket(ticket, userId, reason, client) {
 }
 
 export async function handleModeratorReply(message) {
-    if (!message.channel.parent?.name === 'Tickets' && 
-        !message.channel.parent?.name === 'tickets') return;
-
-    await handleTicketReply(message, true);
+    // Check for both lowercase and uppercase "Tickets" categories
+    if (message.channel.isThread() && 
+        message.channel.parent?.name.toLowerCase() === 'tickets') {
+        console.log('Processing ticket reply in thread');
+        await handleTicketReply(null, message);
+        return;
+    }
+    
+    if (message.channel.type === ChannelType.GuildText && 
+        (message.channel.parent?.name === 'Tickets' || message.channel.parent?.name === 'tickets')) {
+        console.log('Processing ticket reply in channel');
+        await handleTicketReply(null, message);
+        return;
+    }
 }
 
 export async function handleTicketWipe(interaction) {
@@ -621,13 +668,18 @@ export async function handleTicketWipe(interaction) {
 
         // Close and delete all tickets
         for (const ticket of tickets) {
-            const channel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
-            
-            if (channel) {
-                if (channel.type === ChannelType.PublicThread) {
-                    await channel.setLocked(true);
-                    await channel.setArchived(true);
-                } else {
+            if (ticket.thread_id) {
+                const forumChannel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
+                if (forumChannel) {
+                    const thread = await forumChannel.threads.fetch(ticket.thread_id).catch(() => null);
+                    if (thread) {
+                        await thread.setLocked(true);
+                        await thread.setArchived(true);
+                    }
+                }
+            } else {
+                const channel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
+                if (channel) {
                     await channel.delete().catch(console.error);
                 }
             }

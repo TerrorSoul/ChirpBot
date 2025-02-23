@@ -89,7 +89,6 @@ async function updateDatabaseSchema() {
                }
            }
        }
-
    } catch (error) {
        console.error('Error updating database schema:', error);
    }
@@ -441,14 +440,12 @@ const database = {
    // Command Pack Management
    registerCommandPack: async (packName, description, category, isCore) => {
         try {
-            // First try to get existing pack
             const existingPack = await db.get(
                 'SELECT id FROM command_packs WHERE name = ?',
                 [packName]
             );
 
             if (existingPack) {
-                // Update existing pack
                 await db.run(`
                     UPDATE command_packs 
                     SET description = ?, category = ?, is_core = ?
@@ -457,7 +454,6 @@ const database = {
                 return true;
             }
 
-            // Insert new pack only if it doesn't exist
             await db.run(`
                 INSERT INTO command_packs 
                 (name, description, category, is_core) 
@@ -473,7 +469,6 @@ const database = {
 
     getEnabledPacks: async (guildId) => {
         try {
-            // Get all packs that are either core OR enabled for this guild
             const enabledPacks = await db.all(`
                 SELECT DISTINCT cp.* 
                 FROM command_packs cp
@@ -509,7 +504,6 @@ const database = {
                 WHERE cp.name = ?
             `, [guildId, packName]);
 
-            // If pack is core or explicitly enabled (1)
             return result?.is_core === 1 || result?.enabled === 1;
         } catch (error) {
             console.error('Error checking pack enabled status:', error);
@@ -537,7 +531,6 @@ const database = {
     
             console.log(`Enable pack result:`, result);
             
-            // Verify the pack was enabled
             const verification = await db.get(
                 'SELECT * FROM server_command_packs WHERE guild_id = ? AND pack_id = ?',
                 [guildId, pack.id]
@@ -597,7 +590,6 @@ const database = {
                 VALUES (?, ?)
             `, [guildId, message]);
             
-            // Keep only the last 10 messages per guild
             await db.run(`
                 DELETE FROM welcome_message_history 
                 WHERE guild_id = ? 
@@ -787,16 +779,15 @@ const database = {
     );
     return pendingReports.count > 0;
 },
+
 resolveReport: async (reportId, resolvedBy) => {
     try {
         console.log('Starting report resolution for message ID:', reportId);
         await database.beginTransaction();
 
-        // Get report info before updating
         const report = await db.get('SELECT reported_user_id, guild_id FROM reports WHERE message_id = ?', [reportId]);
         console.log('Found report:', report);
 
-        // Update the report status
         await db.run(`
             UPDATE reports 
             SET status = 'RESOLVED', 
@@ -806,7 +797,6 @@ resolveReport: async (reportId, resolvedBy) => {
             [resolvedBy, reportId]
         );
 
-        // Check remaining active reports for this user
         const remainingReports = await db.get(`
             SELECT COUNT(*) as count 
             FROM reports 
@@ -901,554 +891,551 @@ resolveReport: async (reportId, resolvedBy) => {
                );
 
                for (const msg of backupData.roleMessages) {
-                   await stmt.run([
-                       msg.message_id,
-                       guildId,
-                       msg.channel_id,
-                       JSON.stringify(msg.roles)
-                   ]);
-               }
-
-               await stmt.finalize();
-           }
-
-           await database.commitTransaction();
-           return true;
-       } catch (error) {
-           await database.rollbackTransaction();
-           throw error;
-       }
-   },
-
-   // Server Management
-   resetServer: async (guildId) => {
-        serverSettingsCache.delete(guildId);
-        
-        const tables = [
-            'server_settings',
-            'warnings',
-            'logs',
-            'role_messages',
-            'welcome_message_history',
-            'spam_warnings',
-            'reports',
-            'server_command_packs'
-        ];
-
-        try {
-            await database.beginTransaction();
-
-            for (const table of tables) {
-                await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, guildId);
+                await stmt.run([
+                    msg.message_id,
+                    guildId,
+                    msg.channel_id,
+                    JSON.stringify(msg.roles)
+                ]);
             }
 
-            await database.commitTransaction();
-            return true;
-        } catch (error) {
-            await database.rollbackTransaction();
-            console.error('Error resetting server:', error);
-            return false;
+            await stmt.finalize();
         }
-    },
 
-   resetServerForSetup: async (guildId) => {
-        serverSettingsCache.delete(guildId);
-        
-        const tables = [
-            'server_settings',
-            'warnings',
-            'logs',
-            'role_messages',
-            'welcome_message_history',
-            'spam_warnings',
-            'reports'
-        ];
-
-        try {
-            await database.beginTransaction();
-
-            for (const table of tables) {
-                await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, guildId);
-            }
-
-            await database.commitTransaction();
-            return true;
-        } catch (error) {
-            await database.rollbackTransaction();
-            console.error('Error resetting server for setup:', error);
-            return false;
-        }
-    },
-
-   // Utility Functions
-   clearExpiredWarnings: async () => {
-        try {
-            // First get all warnings that are about to expire
-            const expiringWarnings = await db.all(`
-                SELECT w.*, g.log_channel_id 
-                FROM warnings w
-                JOIN server_settings g ON w.guild_id = g.guild_id
-                WHERE w.expires_at IS NOT NULL 
-                AND w.expires_at < datetime('now')
-            `);
-
-            // Group warnings by guild and user for logging
-            const warningsByGuildAndUser = expiringWarnings.reduce((acc, warning) => {
-                const key = `${warning.guild_id}-${warning.user_id}`;
-                if (!acc[key]) {
-                    acc[key] = {
-                        guildId: warning.guild_id,
-                        userId: warning.user_id,
-                        logChannelId: warning.log_channel_id,
-                        count: 0
-                    };
-                }
-                acc[key].count++;
-                return acc;
-            }, {});
-
-            // Delete the expired warnings
-            await db.run(`
-                DELETE FROM warnings 
-                WHERE expires_at IS NOT NULL 
-                AND expires_at < datetime('now')
-            `);
-
-            // Log for each affected user
-            for (const key of Object.keys(warningsByGuildAndUser)) {
-                const { guildId, userId, count } = warningsByGuildAndUser[key];
-                
-                const guild = await client.guilds.fetch(guildId).catch(() => null);
-                if (!guild) continue;
-
-                const user = await client.users.fetch(userId).catch(() => null);
-                if (!user) continue;
-
-                await loggingService.logEvent(guild, 'WARNINGS_EXPIRED', {
-                    userId: userId,
-                    userTag: user.tag,
-                    warningsExpired: count,
-                    reason: 'Warning(s) expired'
-                });
-            }
-        } catch (error) {
-            console.error('Error clearing expired warnings:', error);
-        }
-    },
-   clearOldBackups: async (guildId, keepCount = 5) => {
-       return await db.run(
-           `DELETE FROM server_backups 
-           WHERE guild_id = ? 
-           AND id NOT IN (
-               SELECT id FROM server_backups 
-               WHERE guild_id = ? 
-               ORDER BY created_at DESC 
-               LIMIT ?
-           )`,
-           [guildId, guildId, keepCount]
-       );
-   },
-
-   clearOldSpamWarnings: async (hours = 24) => {
-       return await db.run(
-           `DELETE FROM spam_warnings 
-           WHERE last_warning < datetime('now', '-' || ? || ' hours')`,
-           [hours]
-       );
-   },
-
-   clearOldResolvedReports: async (days = 30) => {
-       return await db.run(
-           `DELETE FROM reports 
-           WHERE status = 'RESOLVED' 
-           AND resolved_at < datetime('now', '-' || ? || ' days')`,
-           [days]
-       );
-   },
-
-   // Logging System
-   logAction: async (guildId, actionType, userId, details) => {
-       return await db.run(
-           'INSERT INTO audit_logs (guild_id, action_type, user_id, details) VALUES (?, ?, ?, ?)',
-           [guildId, actionType, userId, details]
-       );
-   },
-
-   getModActions: async (guildId, userId) => {
-       return await db.all(
-           `SELECT * FROM audit_logs 
-           WHERE guild_id = ? 
-           AND (user_id = ? OR target_id = ?)
-           AND action_type IN ('BAN', 'KICK', 'TIMEOUT', 'WARN', 'MUTE', 'UNMUTE')
-           ORDER BY created_at DESC
-           LIMIT 10`,
-           [guildId, userId, userId]
-       );
-   },
-
-   // Stats and Reporting
-   getServerStats: async (guildId) => {
-       const stats = {
-           warningCount: 0,
-           activeWarnings: 0,
-           spamWarnings: 0,
-           backupCount: 0,
-           moderationActions: 0,
-           pendingReports: 0
-       };
-
-       const results = await Promise.all([
-           db.get('SELECT COUNT(*) as count FROM warnings WHERE guild_id = ?', [guildId]),
-           db.get('SELECT COUNT(*) as count FROM warnings WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > datetime(\'now\'))', [guildId]),
-           db.get('SELECT COUNT(*) as count FROM spam_warnings WHERE guild_id = ?', [guildId]),
-           db.get('SELECT COUNT(*) as count FROM server_backups WHERE guild_id = ?', [guildId]),
-           db.get('SELECT COUNT(*) as count FROM audit_logs WHERE guild_id = ? AND action_type IN (\'BAN\', \'KICK\', \'TIMEOUT\', \'WARN\', \'MUTE\')', [guildId]),
-           db.get('SELECT COUNT(*) as count FROM reports WHERE guild_id = ? AND status = \'PENDING\'', [guildId])
-       ]);
-
-       stats.warningCount = results[0].count;
-       stats.activeWarnings = results[1].count;
-       stats.spamWarnings = results[2].count;
-       stats.backupCount = results[3].count;
-       stats.moderationActions = results[4].count;
-       stats.pendingReports = results[5].count;
-
-       return stats;
-   },
-
-   getCurrentBOTD: async () => {
-        const today = new Date().toISOString().split('T')[0];
-        return await db.get(
-            'SELECT * FROM block_of_the_day WHERE shown_at = ?',
-            [today]
-        );
-    },
-
-    getRecentBOTDs: async (days = 30) => {
-        return await db.all(`
-            SELECT block_title 
-            FROM block_of_the_day 
-            WHERE shown_at >= date('now', ?) 
-            ORDER BY shown_at DESC`,
-            [`-${days} days`]
-        );
-    },
-
-    setBlockOfTheDay: async (blockTitle) => {
-        const today = new Date().toISOString().split('T')[0];
-        return await db.run(
-            'INSERT INTO block_of_the_day (block_title, shown_at) VALUES (?, ?)',
-            [blockTitle, today]
-        );
-    },
-
-    startBlockGame: async (channelId, blockTitle) => {
-        return await db.run(
-            'INSERT OR REPLACE INTO block_games (channel_id, block_title, hints_given) VALUES (?, ?, 0)',
-            [channelId, blockTitle]
-        );
-    },
-    
-    getActiveGame: async (channelId) => {
-        return await db.get(
-            'SELECT * FROM block_games WHERE channel_id = ?',
-            [channelId]
-        );
-    },
-    
-    incrementHints: async (channelId) => {
-        return await db.run(
-            'UPDATE block_games SET hints_given = hints_given + 1 WHERE channel_id = ?',
-            [channelId]
-        );
-    },
-    
-    endGame: async (channelId) => {
-        return await db.run(
-            'DELETE FROM block_games WHERE channel_id = ?',
-            [channelId]
-        );
-    },
-
-    getChannelPermissions: async (guildId, channelId) => {
-        return await db.all(
-            'SELECT command_category FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category IS NOT NULL',
-            [guildId, channelId]
-        );
-    },
-    
-    getChannelCommandPermissions: async (guildId, channelId) => {
-        return await db.all(
-            'SELECT command_name FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name IS NOT NULL',
-            [guildId, channelId]
-        );
-    },
-    
-    getAllChannelPermissions: async (guildId) => {
-        return await db.all(
-            'SELECT channel_id, command_category, command_name FROM channel_permissions WHERE guild_id = ?',
-            [guildId]
-        );
-    },
-    
-    setChannelPermission: async (guildId, channelId, category) => {
-        return await db.run(
-            'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_category) VALUES (?, ?, ?)',
-            [guildId, channelId, category]
-        );
-    },
-    
-    setChannelCommandPermission: async (guildId, channelId, commandName) => {
-        return await db.run(
-            'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_name) VALUES (?, ?, ?)',
-            [guildId, channelId, commandName]
-        );
-    },
-    
-    removeChannelPermission: async (guildId, channelId, category) => {
-        return await db.run(
-            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category = ?',
-            [guildId, channelId, category]
-        );
-    },
-    
-    removeChannelCommandPermission: async (guildId, channelId, commandName) => {
-        return await db.run(
-            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name = ?',
-            [guildId, channelId, commandName]
-        );
-    },
-    
-    clearChannelPermissions: async (guildId, channelId) => {
-        return await db.run(
-            'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ?',
-            [guildId, channelId]
-        );
-    },
-    
-    getChannelsByPermission: async (guildId, category) => {
-        return await db.all(
-            'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_category = ?',
-            [guildId, category]
-        );
-    },
-    
-    getChannelsByCommand: async (guildId, commandName) => {
-        return await db.all(
-            'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_name = ?',
-            [guildId, commandName]
-        );
-    },
-
-    addTimeBasedRole: async (guildId, roleId, daysRequired, isCustomCreated = false) => {
-        return await db.run(`
-            INSERT OR REPLACE INTO time_based_roles 
-            (guild_id, role_id, days_required, is_custom_created) 
-            VALUES (?, ?, ?, ?)`,
-            [guildId, roleId, daysRequired, isCustomCreated]
-        );
-    },
-
-    getTimeBasedRoles: async (guildId) => {
-        return await db.all(`
-            SELECT * FROM time_based_roles
-            WHERE guild_id = ?
-            ORDER BY days_required ASC`,
-            [guildId]
-        );
-    },
-
-    removeTimeBasedRole: async (guildId, roleId) => {
-        return await db.run(`
-            DELETE FROM time_based_roles
-            WHERE guild_id = ? AND role_id = ?`,
-            [guildId, roleId]
-        );
-    },
-
-    isTimeBasedRole: async (guildId, roleId) => {
-        const role = await db.get(`
-            SELECT * FROM time_based_roles
-            WHERE guild_id = ? AND role_id = ?`,
-            [guildId, roleId]
-        );
-        return !!role;
-    },
-
-    getRoleTimeRequirement: async (guildId, roleId) => {
-        const role = await db.get(`
-            SELECT days_required FROM time_based_roles
-            WHERE guild_id = ? AND role_id = ?`,
-            [guildId, roleId]
-        );
-        return role ? role.days_required : null;
-    },
-
-    updateTimeBasedRole: async (guildId, roleId, daysRequired) => {
-        return await db.run(`
-            UPDATE time_based_roles 
-            SET days_required = ? 
-            WHERE guild_id = ? AND role_id = ?`,
-            [daysRequired, guildId, roleId]
-        );
-    },
-
-    addFilteredTerm: async (guildId, term, severity, addedBy) => {
-        await db.run(
-            'INSERT OR REPLACE INTO filtered_terms (guild_id, term, severity, added_by) VALUES (?, ?, ?, ?)',
-            [guildId, term.toLowerCase(), severity, addedBy]
-        );
-        clearFilterCache(guildId);
-    },
-    
-    removeFilteredTerm: async (guildId, term) => {
-        await db.run(
-            'DELETE FROM filtered_terms WHERE guild_id = ? AND term = ?',
-            [guildId, term.toLowerCase()]
-        );
-        clearFilterCache(guildId);
-    },
-    
-    getFilteredTerms: async (guildId) => {
-        let cached = getCachedFilter(guildId);
-        if (cached) return cached;
-    
-        const terms = await db.all(
-            'SELECT * FROM filtered_terms WHERE guild_id = ?',
-            [guildId]
-        );
-        
-        const result = {
-            explicit: terms.filter(t => t.severity === 'explicit').map(t => t.term),
-            suspicious: terms.filter(t => t.severity === 'suspicious').map(t => t.term)
-        };
-    
-        setCachedFilter(guildId, result);
-        return result;
-    },
-    
-    importDefaultTerms: async (guildId, terms, addedBy) => {
-        try {
-            await database.beginTransaction();
-            
-            for (const term of terms.explicit) {
-                await database.addFilteredTerm(guildId, term, 'explicit', addedBy);
-            }
-            for (const term of terms.suspicious) {
-                await database.addFilteredTerm(guildId, term, 'suspicious', addedBy);
-            }
-            
-            await database.commitTransaction();
-        } catch (error) {
-            await database.rollbackTransaction();
-            throw error;
-        }
-    },
-
-    getActiveUserTickets: async (userId) => {
-        return await db.all(`
-            SELECT * FROM tickets 
-            WHERE user_id = ? AND status = 'OPEN'
-            ORDER BY created_at DESC`,
-            [userId]
-        );
-    },
-    
-    getTicket: async (channelOrThreadId) => {
-        return await db.get(`
-            SELECT * FROM tickets 
-            WHERE channel_id = ? OR thread_id = ?`,
-            [channelOrThreadId, channelOrThreadId]
-        );
-    },
-    
-    getLatestTicket: async (userId) => {
-        return await db.get(`
-            SELECT * FROM tickets 
-            WHERE user_id = ? AND status = 'OPEN'
-            ORDER BY created_at DESC 
-            LIMIT 1`,
-            [userId]
-        );
-    },
-    
-    createTicket: async (guildId, userId, channelId, threadId = null) => {
-        return await db.run(`
-            INSERT INTO tickets (guild_id, user_id, channel_id, thread_id)
-            VALUES (?, ?, ?, ?)`,
-            [guildId, userId, channelId, threadId]
-        );
-    },
-    
-    addTicketMessage: async (ticketId, authorId, content) => {
-        return await db.run(`
-            INSERT INTO ticket_messages (ticket_id, author_id, content)
-            VALUES (?, ?, ?)`,
-            [ticketId, authorId, content]
-        );
-    },
-    
-    closeTicket: async (ticketId, closedBy) => {
-        return await db.run(`
-            UPDATE tickets 
-            SET status = 'CLOSED', 
-                closed_at = CURRENT_TIMESTAMP, 
-                closed_by = ?
-            WHERE id = ?`,
-            [closedBy, ticketId]
-        );
-    },
-    
-    isUserBlocked: async (guildId, userId) => {
-        const result = await db.get(`
-            SELECT 1 FROM blocked_ticket_users 
-            WHERE guild_id = ? AND user_id = ?`,
-            [guildId, userId]
-        );
-        return !!result;
-    },
-    
-    blockUser: async (guildId, userId, blockedBy, reason) => {
-        return await db.run(`
-            INSERT OR REPLACE INTO blocked_ticket_users 
-            (guild_id, user_id, blocked_by, reason)
-            VALUES (?, ?, ?, ?)`,
-            [guildId, userId, blockedBy, reason]
-        );
-    },
-    
-    unblockUser: async (guildId, userId) => {
-        return await db.run(`
-            DELETE FROM blocked_ticket_users
-            WHERE guild_id = ? AND user_id = ?`,
-            [guildId, userId]
-        );
-    },
-    
-    getRecentTickets: async (guildId, userId) => {
-        return await db.all(`
-            SELECT * FROM tickets 
-            WHERE guild_id = ? AND user_id = ? 
-            AND created_at > datetime('now', '-1 day')`,
-            [guildId, userId]
-        );
-    },
-
-    getAllUserTickets: async (guildId, userId) => {
-        return await db.all(`
-            SELECT * FROM tickets 
-            WHERE guild_id = ? AND user_id = ?`,
-            [guildId, userId]
-        );
-    },
-    
-    wipeUserTickets: async (guildId, userId) => {
-        return await db.run(`
-            DELETE FROM tickets 
-            WHERE guild_id = ? AND user_id = ?`,
-            [guildId, userId]
-        );
+        await database.commitTransaction();
+        return true;
+    } catch (error) {
+        await database.rollbackTransaction();
+        throw error;
     }
+},
+
+// Server Management
+resetServer: async (guildId) => {
+     serverSettingsCache.delete(guildId);
+     
+     const tables = [
+         'server_settings',
+         'warnings',
+         'logs',
+         'role_messages',
+         'welcome_message_history',
+         'spam_warnings',
+         'reports',
+         'server_command_packs'
+     ];
+
+     try {
+         await database.beginTransaction();
+
+         for (const table of tables) {
+             await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, guildId);
+         }
+
+         await database.commitTransaction();
+         return true;
+     } catch (error) {
+         await database.rollbackTransaction();
+         console.error('Error resetting server:', error);
+         return false;
+     }
+ },
+
+resetServerForSetup: async (guildId) => {
+     serverSettingsCache.delete(guildId);
+     
+     const tables = [
+         'server_settings',
+         'warnings',
+         'logs',
+         'role_messages',
+         'welcome_message_history',
+         'spam_warnings',
+         'reports'
+     ];
+
+     try {
+         await database.beginTransaction();
+
+         for (const table of tables) {
+             await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, guildId);
+         }
+
+         await database.commitTransaction();
+         return true;
+     } catch (error) {
+         await database.rollbackTransaction();
+         console.error('Error resetting server for setup:', error);
+         return false;
+     }
+ },
+
+// Utility Functions
+clearExpiredWarnings: async () => {
+     try {
+         const expiringWarnings = await db.all(`
+             SELECT w.*, g.log_channel_id 
+             FROM warnings w
+             JOIN server_settings g ON w.guild_id = g.guild_id
+             WHERE w.expires_at IS NOT NULL 
+             AND w.expires_at < datetime('now')
+         `);
+
+         const warningsByGuildAndUser = expiringWarnings.reduce((acc, warning) => {
+             const key = `${warning.guild_id}-${warning.user_id}`;
+             if (!acc[key]) {
+                 acc[key] = {
+                     guildId: warning.guild_id,
+                     userId: warning.user_id,
+                     logChannelId: warning.log_channel_id,
+                     count: 0
+                 };
+             }
+             acc[key].count++;
+             return acc;
+         }, {});
+
+         await db.run(`
+             DELETE FROM warnings 
+             WHERE expires_at IS NOT NULL 
+             AND expires_at < datetime('now')
+         `);
+
+         for (const key of Object.keys(warningsByGuildAndUser)) {
+             const { guildId, userId, count } = warningsByGuildAndUser[key];
+             
+             const guild = await client.guilds.fetch(guildId).catch(() => null);
+             if (!guild) continue;
+
+             const user = await client.users.fetch(userId).catch(() => null);
+             if (!user) continue;
+
+             await loggingService.logEvent(guild, 'WARNINGS_EXPIRED', {
+                 userId: userId,
+                 userTag: user.tag,
+                 warningsExpired: count,
+                 reason: 'Warning(s) expired'
+             });
+         }
+     } catch (error) {
+         console.error('Error clearing expired warnings:', error);
+     }
+ },
+
+clearOldBackups: async (guildId, keepCount = 5) => {
+    return await db.run(
+        `DELETE FROM server_backups 
+        WHERE guild_id = ? 
+        AND id NOT IN (
+            SELECT id FROM server_backups 
+            WHERE guild_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        )`,
+        [guildId, guildId, keepCount]
+    );
+},
+
+clearOldSpamWarnings: async (hours = 24) => {
+    return await db.run(
+        `DELETE FROM spam_warnings 
+        WHERE last_warning < datetime('now', '-' || ? || ' hours')`,
+        [hours]
+    );
+},
+
+clearOldResolvedReports: async (days = 30) => {
+    return await db.run(
+        `DELETE FROM reports 
+        WHERE status = 'RESOLVED' 
+        AND resolved_at < datetime('now', '-' || ? || ' days')`,
+        [days]
+    );
+},
+
+// Logging System
+logAction: async (guildId, actionType, userId, details) => {
+    return await db.run(
+        'INSERT INTO audit_logs (guild_id, action_type, user_id, details) VALUES (?, ?, ?, ?)',
+        [guildId, actionType, userId, details]
+    );
+},
+
+getModActions: async (guildId, userId) => {
+    return await db.all(
+        `SELECT * FROM audit_logs 
+        WHERE guild_id = ? 
+        AND (user_id = ? OR target_id = ?)
+        AND action_type IN ('BAN', 'KICK', 'TIMEOUT', 'WARN', 'MUTE', 'UNMUTE')
+        ORDER BY created_at DESC
+        LIMIT 10`,
+        [guildId, userId, userId]
+    );
+},
+
+// Stats and Reporting
+getServerStats: async (guildId) => {
+    const stats = {
+        warningCount: 0,
+        activeWarnings: 0,
+        spamWarnings: 0,
+        backupCount: 0,
+        moderationActions: 0,
+        pendingReports: 0
+    };
+
+    const results = await Promise.all([
+        db.get('SELECT COUNT(*) as count FROM warnings WHERE guild_id = ?', [guildId]),
+        db.get('SELECT COUNT(*) as count FROM warnings WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > datetime(\'now\'))', [guildId]),
+        db.get('SELECT COUNT(*) as count FROM spam_warnings WHERE guild_id = ?', [guildId]),
+        db.get('SELECT COUNT(*) as count FROM server_backups WHERE guild_id = ?', [guildId]),
+        db.get('SELECT COUNT(*) as count FROM audit_logs WHERE guild_id = ? AND action_type IN (\'BAN\', \'KICK\', \'TIMEOUT\', \'WARN\', \'MUTE\')', [guildId]),
+        db.get('SELECT COUNT(*) as count FROM reports WHERE guild_id = ? AND status = \'PENDING\'', [guildId])
+    ]);
+
+    stats.warningCount = results[0].count;
+    stats.activeWarnings = results[1].count;
+    stats.spamWarnings = results[2].count;
+    stats.backupCount = results[3].count;
+    stats.moderationActions = results[4].count;
+    stats.pendingReports = results[5].count;
+
+    return stats;
+},
+
+getCurrentBOTD: async () => {
+     const today = new Date().toISOString().split('T')[0];
+     return await db.get(
+         'SELECT * FROM block_of_the_day WHERE shown_at = ?',
+         [today]
+     );
+ },
+
+ getRecentBOTDs: async (days = 30) => {
+     return await db.all(`
+         SELECT block_title 
+         FROM block_of_the_day 
+         WHERE shown_at >= date('now', ?) 
+         ORDER BY shown_at DESC`,
+         [`-${days} days`]
+     );
+ },
+
+ setBlockOfTheDay: async (blockTitle) => {
+     const today = new Date().toISOString().split('T')[0];
+     return await db.run(
+         'INSERT INTO block_of_the_day (block_title, shown_at) VALUES (?, ?)',
+         [blockTitle, today]
+     );
+ },
+
+ startBlockGame: async (channelId, blockTitle) => {
+     return await db.run(
+         'INSERT OR REPLACE INTO block_games (channel_id, block_title, hints_given) VALUES (?, ?, 0)',
+         [channelId, blockTitle]
+     );
+ },
+ 
+ getActiveGame: async (channelId) => {
+     return await db.get(
+         'SELECT * FROM block_games WHERE channel_id = ?',
+         [channelId]
+     );
+ },
+ 
+ incrementHints: async (channelId) => {
+     return await db.run(
+         'UPDATE block_games SET hints_given = hints_given + 1 WHERE channel_id = ?',
+         [channelId]
+     );
+ },
+ 
+ endGame: async (channelId) => {
+     return await db.run(
+         'DELETE FROM block_games WHERE channel_id = ?',
+         [channelId]
+     );
+ },
+
+ getChannelPermissions: async (guildId, channelId) => {
+     return await db.all(
+         'SELECT command_category FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category IS NOT NULL',
+         [guildId, channelId]
+     );
+ },
+ 
+ getChannelCommandPermissions: async (guildId, channelId) => {
+     return await db.all(
+         'SELECT command_name FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name IS NOT NULL',
+         [guildId, channelId]
+     );
+ },
+ 
+ getAllChannelPermissions: async (guildId) => {
+     return await db.all(
+         'SELECT channel_id, command_category, command_name FROM channel_permissions WHERE guild_id = ?',
+         [guildId]
+     );
+ },
+ 
+ setChannelPermission: async (guildId, channelId, category) => {
+     return await db.run(
+         'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_category) VALUES (?, ?, ?)',
+         [guildId, channelId, category]
+     );
+ },
+ 
+ setChannelCommandPermission: async (guildId, channelId, commandName) => {
+     return await db.run(
+         'INSERT OR REPLACE INTO channel_permissions (guild_id, channel_id, command_name) VALUES (?, ?, ?)',
+         [guildId, channelId, commandName]
+     );
+ },
+ 
+ removeChannelPermission: async (guildId, channelId, category) => {
+     return await db.run(
+         'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_category = ?',
+         [guildId, channelId, category]
+     );
+ },
+ 
+ removeChannelCommandPermission: async (guildId, channelId, commandName) => {
+     return await db.run(
+         'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ? AND command_name = ?',
+         [guildId, channelId, commandName]
+     );
+ },
+ 
+ clearChannelPermissions: async (guildId, channelId) => {
+     return await db.run(
+         'DELETE FROM channel_permissions WHERE guild_id = ? AND channel_id = ?',
+         [guildId, channelId]
+     );
+ },
+ 
+ getChannelsByPermission: async (guildId, category) => {
+     return await db.all(
+         'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_category = ?',
+         [guildId, category]
+     );
+ },
+ 
+ getChannelsByCommand: async (guildId, commandName) => {
+     return await db.all(
+         'SELECT DISTINCT channel_id FROM channel_permissions WHERE guild_id = ? AND command_name = ?',
+         [guildId, commandName]
+     );
+ },
+
+ addTimeBasedRole: async (guildId, roleId, daysRequired, isCustomCreated = false) => {
+     return await db.run(`
+         INSERT OR REPLACE INTO time_based_roles 
+         (guild_id, role_id, days_required, is_custom_created) 
+         VALUES (?, ?, ?, ?)`,
+         [guildId, roleId, daysRequired, isCustomCreated]
+     );
+ },
+
+ getTimeBasedRoles: async (guildId) => {
+     return await db.all(`
+         SELECT * FROM time_based_roles
+         WHERE guild_id = ?
+         ORDER BY days_required ASC`,
+         [guildId]
+     );
+ },
+
+ removeTimeBasedRole: async (guildId, roleId) => {
+     return await db.run(`
+         DELETE FROM time_based_roles
+         WHERE guild_id = ? AND role_id = ?`,
+         [guildId, roleId]
+     );
+ },
+
+ isTimeBasedRole: async (guildId, roleId) => {
+     const role = await db.get(`
+         SELECT * FROM time_based_roles
+         WHERE guild_id = ? AND role_id = ?`,
+         [guildId, roleId]
+     );
+     return !!role;
+ },
+
+ getRoleTimeRequirement: async (guildId, roleId) => {
+     const role = await db.get(`
+         SELECT days_required FROM time_based_roles
+         WHERE guild_id = ? AND role_id = ?`,
+         [guildId, roleId]
+     );
+     return role ? role.days_required : null;
+ },
+
+ updateTimeBasedRole: async (guildId, roleId, daysRequired) => {
+     return await db.run(`
+         UPDATE time_based_roles 
+         SET days_required = ? 
+         WHERE guild_id = ? AND role_id = ?`,
+         [daysRequired, guildId, roleId]
+     );
+ },
+
+ addFilteredTerm: async (guildId, term, severity, addedBy) => {
+     await db.run(
+         'INSERT OR REPLACE INTO filtered_terms (guild_id, term, severity, added_by) VALUES (?, ?, ?, ?)',
+         [guildId, term.toLowerCase(), severity, addedBy]
+     );
+     clearFilterCache(guildId);
+ },
+ 
+ removeFilteredTerm: async (guildId, term) => {
+     await db.run(
+         'DELETE FROM filtered_terms WHERE guild_id = ? AND term = ?',
+         [guildId, term.toLowerCase()]
+     );
+     clearFilterCache(guildId);
+ },
+ 
+ getFilteredTerms: async (guildId) => {
+     let cached = getCachedFilter(guildId);
+     if (cached) return cached;
+ 
+     const terms = await db.all(
+         'SELECT * FROM filtered_terms WHERE guild_id = ?',
+         [guildId]
+     );
+     
+     const result = {
+         explicit: terms.filter(t => t.severity === 'explicit').map(t => t.term),
+         suspicious: terms.filter(t => t.severity === 'suspicious').map(t => t.term)
+     };
+ 
+     setCachedFilter(guildId, result);
+     return result;
+ },
+ 
+ importDefaultTerms: async (guildId, terms, addedBy) => {
+     try {
+         await database.beginTransaction();
+         
+         for (const term of terms.explicit) {
+             await database.addFilteredTerm(guildId, term, 'explicit', addedBy);
+         }
+         for (const term of terms.suspicious) {
+             await database.addFilteredTerm(guildId, term, 'suspicious', addedBy);
+         }
+         
+         await database.commitTransaction();
+     } catch (error) {
+         await database.rollbackTransaction();
+         throw error;
+     }
+ },
+
+ getActiveUserTickets: async (userId) => {
+    return await db.all(`
+        SELECT * FROM tickets
+        WHERE user_id = ? AND status = 'OPEN'
+        ORDER BY created_at DESC`,
+        [userId]
+    );
+},
+
+getTicket: async (channelOrThreadId) => {
+    return await db.get(`
+        SELECT * FROM tickets
+        WHERE channel_id = ? OR thread_id = ?`,
+        [channelOrThreadId, channelOrThreadId]
+    );
+},
+
+getLatestTicket: async (userId) => {
+    return await db.get(`
+        SELECT * FROM tickets
+        WHERE user_id = ? AND status = 'OPEN'
+        ORDER BY created_at DESC
+        LIMIT 1`,
+        [userId]
+    );
+},
+
+createTicket: async (guildId, userId, channelId, threadId = null) => {
+    return await db.run(`
+        INSERT INTO tickets (guild_id, user_id, channel_id, thread_id)
+        VALUES (?, ?, ?, ?)`,
+        [guildId, userId, channelId, threadId]
+    );
+},
+
+addTicketMessage: async (ticketId, authorId, content) => {
+    return await db.run(`
+        INSERT INTO ticket_messages (ticket_id, author_id, content)
+        VALUES (?, ?, ?)`,
+        [ticketId, authorId, content]
+    );
+},
+
+closeTicket: async (ticketId, closedBy) => {
+    return await db.run(`
+        UPDATE tickets
+        SET status = 'CLOSED',
+            closed_at = CURRENT_TIMESTAMP,
+            closed_by = ?
+        WHERE id = ?`,
+        [closedBy, ticketId]
+    );
+},
+
+isUserBlocked: async (guildId, userId) => {
+    const result = await db.get(`
+        SELECT 1 FROM blocked_ticket_users
+        WHERE guild_id = ? AND user_id = ?`,
+        [guildId, userId]
+    );
+    return !!result;
+},
+
+blockUser: async (guildId, userId, blockedBy, reason) => {
+    return await db.run(`
+        INSERT OR REPLACE INTO blocked_ticket_users
+        (guild_id, user_id, blocked_by, reason)
+        VALUES (?, ?, ?, ?)`,
+        [guildId, userId, blockedBy, reason]
+    );
+},
+
+unblockUser: async (guildId, userId) => {
+    return await db.run(`
+        DELETE FROM blocked_ticket_users
+        WHERE guild_id = ? AND user_id = ?`,
+        [guildId, userId]
+    );
+},
+
+getRecentTickets: async (guildId, userId) => {
+    return await db.all(`
+        SELECT * FROM tickets
+        WHERE guild_id = ? AND user_id = ?
+        AND created_at > datetime('now', '-1 day')`,
+        [guildId, userId]
+    );
+},
+
+getAllUserTickets: async (guildId, userId) => {
+    return await db.all(`
+        SELECT * FROM tickets
+        WHERE guild_id = ? AND user_id = ?`,
+        [guildId, userId]
+    );
+},
+
+wipeUserTickets: async (guildId, userId) => {
+    return await db.run(`
+        DELETE FROM tickets
+        WHERE guild_id = ? AND user_id = ?`,
+        [guildId, userId]
+    );
+}
 };
 
 // Initialize database
@@ -1456,10 +1443,10 @@ await initDatabase();
 
 // Cleanup intervals
 setInterval(async () => {
-   await database.clearExpiredWarnings();
-   await database.clearOldSpamWarnings();
-   await database.clearOldResolvedReports();
-   serverSettingsCache.clear();
+await database.clearExpiredWarnings();
+await database.clearOldSpamWarnings();
+await database.clearOldResolvedReports();
+serverSettingsCache.clear();
 }, 6 * 60 * 60 * 1000); // Every 6 hours
 
 export default database;

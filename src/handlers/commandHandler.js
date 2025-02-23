@@ -272,16 +272,16 @@ export async function handleCommand(interaction) {
                 command = interaction.client.guildCommands.get(interaction.commandName);
             }
         }
- 
+
         if (!command) return;
- 
+
         // Handle global commands
         if (command.global) {
             const { onCooldown, timeLeft } = checkGlobalCooldown(
                 interaction.user.id,
                 interaction.commandName
             );
- 
+
             if (onCooldown) {
                 await interaction.reply({
                     content: `Please wait ${timeLeft} seconds before using this command again.`,
@@ -289,10 +289,10 @@ export async function handleCommand(interaction) {
                 });
                 return;
             }
- 
+
             addGlobalCooldown(interaction.user.id, interaction.commandName);
             await command.execute(interaction);
- 
+
             // Only log guild commands
             if (interaction.guild && interaction.commandName !== 'reset') {
                 interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
@@ -306,7 +306,7 @@ export async function handleCommand(interaction) {
             }
             return;
         }
- 
+
         // Everything below this is for guild-only commands
         if (!interaction.guild) {
             await interaction.reply({
@@ -315,40 +315,40 @@ export async function handleCommand(interaction) {
             });
             return;
         }
- 
+
         // Force reload settings for guild commands
         interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
- 
+
         // Check permissions for guild commands
         if (!await hasPermission(interaction, command)) {
             return;
         }
- 
+
         // Check if command pack is enabled for guild commands
         if (!await canUseCommand(interaction, command)) {
             return;
         }
- 
+
         // Handle cooldowns for non-admin guild commands
         if (!['owner', 'admin'].includes(command.permissionLevel)) {
             const settings = await db.getServerSettings(interaction.guildId);
             interaction.guild.settings = settings;  // Update cached settings
- 
+
             // Skip cooldown for owner and moderators
             const isOwner = interaction.guild.ownerId === interaction.user.id;
             const isModerator = settings?.mod_role_id && interaction.member.roles.cache.has(settings.mod_role_id);
- 
+
             if (!isOwner && !isModerator) {
                 const baseCooldown = settings?.cooldown_seconds || 
                     DEFAULT_SETTINGS.cooldowns[interaction.commandName] || 
                     DEFAULT_SETTINGS.cooldowns.default;
- 
+
                 const { onCooldown, timeLeft, userCount } = checkCooldown(
                     interaction.guildId,
                     interaction.user.id,
                     interaction.commandName
                 );
- 
+
                 if (onCooldown) {
                     let cooldownMessage = `Please wait ${timeLeft} seconds before using this command again.`;
                     if (userCount > 5) {
@@ -361,14 +361,14 @@ export async function handleCommand(interaction) {
                     });
                     return;
                 }
- 
+
                 const dynamicDuration = addCooldown(
                     interaction.guildId,
                     interaction.user.id,
                     interaction.commandName,
                     baseCooldown
                 );
- 
+
                 // Notify user if cooldown was increased
                 if (dynamicDuration > baseCooldown) {
                     await interaction.reply({
@@ -379,7 +379,7 @@ export async function handleCommand(interaction) {
                 }
             }
         }
- 
+
         await command.execute(interaction);
         // Refresh settings after command execution
         interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
@@ -400,7 +400,7 @@ export async function handleCommand(interaction) {
                     : 'An error occurred while executing this command.',
                 ephemeral: true
             };
- 
+
             if (interaction.deferred) {
                 await interaction.editReply(response);
             } else if (!interaction.replied) {
@@ -410,6 +410,6 @@ export async function handleCommand(interaction) {
             }
         } catch (err) {
             console.error('Error sending error response:', err);
-        }
-    }
- }
+       }
+   }
+}

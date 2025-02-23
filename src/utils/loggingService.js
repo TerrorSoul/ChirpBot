@@ -3,122 +3,233 @@ import { EmbedBuilder, ChannelType, ThreadAutoArchiveDuration, PermissionFlagsBi
 import db from '../database/index.js';
 
 class LoggingService {
-    constructor() {
-        this.threadCache = new Map();
-        this.lastThreadActivity = new Map();
+   constructor() {
+       this.threadCache = new Map();
+       this.lastThreadActivity = new Map();
+       this.threadCreationLocks = new Map();
+       this.threadDeletionQueue = new Map();
 
-        this.colors = {
-            'SCAM': '#FF0000',
-            'NSFW': '#FF69B4',
-            'EXPLICIT': '#FF4500',
-            'FILTER': '#FF6B6B'
-        };
-        
-        this.icons = {
-            'SCAM': '🚫',
-            'NSFW': '🔞',
-            'EXPLICIT': '⛔',
-            'FILTER': '⚠️'
-        };
-    }
+       // Constants for thread management
+       this.THREAD_CLEANUP_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+       this.MAX_ACTIVE_THREADS = 950; // Discord limit is 1000
+       this.THREAD_ARCHIVE_BATCH = 500;
+       this.LOCK_TIMEOUT = 30000; // 30 seconds
+       
+       this.colors = {
+           'SCAM': '#FF0000',
+           'NSFW': '#FF69B4',
+           'EXPLICIT': '#FF4500',
+           'FILTER': '#FF6B6B',
+           'SUCCESS': '#00FF00',
+           'WARNING': '#FFA500',
+           'INFO': '#0099FF',
+           'ERROR': '#FF0000'
+       };
+       
+       this.icons = {
+           'SCAM': '🚫',
+           'NSFW': '🔞',
+           'EXPLICIT': '⛔',
+           'FILTER': '⚠️',
+           'SUCCESS': '✅',
+           'WARNING': '⚠️',
+           'INFO': 'ℹ️',
+           'ERROR': '❌'
+       };
 
-    async initializeForumChannel(channel) {
-        // Check bot permissions
-        const botPermissions = channel.permissionsFor(channel.guild.members.me);
-        const requiredPermissions = [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-            PermissionFlagsBits.ReadMessageHistory
-        ];
-    
-        // Add forum-specific permissions if it's a forum channel
-        if (channel.type === ChannelType.GuildForum) {
-            requiredPermissions.push(
-                PermissionFlagsBits.ManageThreads,
-                PermissionFlagsBits.CreatePublicThreads
-            );
-        }
-    
-        const missingPermissions = requiredPermissions.filter(perm => !botPermissions.has(perm));
-        if (missingPermissions.length > 0) {
-            throw new Error(`Missing required permissions in log channel: ${missingPermissions.join(', ')}`);
-        }
-    
-        // Only set up tags for forum channels
-        if (channel.type === ChannelType.GuildForum) {
-            const existingTags = channel.availableTags;
-            const requiredTags = [
-                { name: 'Log', color: '#5865F2' },
-                { name: 'Banned', color: '#FF0000' },
-                { name: 'Muted', color: '#FFA500' },
-                { name: 'Reported', color: '#FF6B6B' }
-            ];
-    
-            let tagsUpdated = false;
-            for (const tag of requiredTags) {
-                if (!existingTags.some(existing => existing.name === tag.name)) {
-                    existingTags.push(tag);
-                    tagsUpdated = true;
-                }
-            }
-    
-            if (tagsUpdated) {
-                await channel.setAvailableTags(existingTags);
-            }
-        }
-    
-        return true;
-    }    
+       // Start cleanup interval
+       setInterval(() => this.cleanCache(), this.THREAD_CLEANUP_INTERVAL);
+   }
 
-    async checkAndCleanupTags() {
+   async initializeForumChannel(channel) {
+       try {
+           const botPermissions = channel.permissionsFor(channel.guild.members.me);
+           const requiredPermissions = [
+               PermissionFlagsBits.ViewChannel,
+               PermissionFlagsBits.SendMessages,
+               PermissionFlagsBits.EmbedLinks,
+               PermissionFlagsBits.ReadMessageHistory,
+               PermissionFlagsBits.ManageThreads,
+               PermissionFlagsBits.CreatePublicThreads
+           ];
+       
+           const missingPermissions = requiredPermissions.filter(perm => !botPermissions.has(perm));
+           if (missingPermissions.length > 0) {
+               throw new Error(`Missing required permissions in log channel: ${missingPermissions.join(', ')}`);
+           }
+       
+           if (channel.type === ChannelType.GuildForum) {
+               const existingTags = channel.availableTags;
+               const requiredTags = [
+                   { name: 'Log', color: '#5865F2' },
+                   { name: 'Banned', color: '#FF0000' },
+                   { name: 'Muted', color: '#FFA500' },
+                   { name: 'Reported', color: '#FF6B6B' }
+               ];
+       
+               let tagsUpdated = false;
+               for (const tag of requiredTags) {
+                   if (!existingTags.some(existing => existing.name === tag.name)) {
+                       existingTags.push(tag);
+                       tagsUpdated = true;
+                   }
+               }
+       
+               if (tagsUpdated) {
+                   await channel.setAvailableTags(existingTags);
+               }
+           }
+       
+           return true;
+       } catch (error) {
+           console.error('Error initializing forum channel:', error);
+           throw error;
+       }
+   }
+
+   async releaseLock(lockKey, userId) {
+       this.threadCreationLocks.delete(lockKey);
+       clearTimeout(this.threadDeletionQueue.get(lockKey));
+       this.threadDeletionQueue.delete(lockKey);
+   }
+
+   async acquireLock(lockKey, userId) {
+       if (this.threadCreationLocks.has(lockKey)) {
+           return false;
+       }
+
+       this.threadCreationLocks.set(lockKey, true);
+       this.threadDeletionQueue.set(lockKey, setTimeout(() => {
+           this.releaseLock(lockKey, userId);
+       }, this.LOCK_TIMEOUT));
+
+       return true;
+   }
+
+   async getOrCreateUserThread(logChannel, userId, userTag) {
+       const lockKey = `thread_creation_${userId}`;
+       const threadName = `${userTag} (${userId})`;
+
+       try {
+           // Check cache first
+           const cachedThread = this.threadCache.get(userId);
+           if (cachedThread) {
+               try {
+                   await cachedThread.fetch();
+                   if (cachedThread.archived) {
+                       await this.manageThreadArchiving(logChannel);
+                       await cachedThread.setArchived(false);
+                   }
+                   this.lastThreadActivity.set(userId, Date.now());
+                   return cachedThread;
+               } catch (error) {
+                   this.threadCache.delete(userId);
+                   this.lastThreadActivity.delete(userId);
+               }
+           }
+
+           let lockAcquired = false;
+           let attempts = 0;
+           const maxAttempts = 5;
+
+           while (!lockAcquired && attempts < maxAttempts) {
+               lockAcquired = await this.acquireLock(lockKey, userId);
+               if (!lockAcquired) {
+                   await new Promise(resolve => setTimeout(resolve, 1000));
+                   attempts++;
+               }
+           }
+
+           if (!lockAcquired) {
+               throw new Error('Failed to acquire thread creation lock');
+           }
+
+           try {
+               const [activeThreads, archivedThreads] = await Promise.all([
+                   logChannel.threads.fetch(),
+                   logChannel.threads.fetchArchived()
+               ]);
+
+               let userThread = activeThreads.threads.find(thread => 
+                   thread.name.endsWith(`(${userId})`)
+               );
+
+               if (!userThread) {
+                   userThread = archivedThreads.threads.find(thread => 
+                       thread.name.endsWith(`(${userId})`)
+                   );
+               }
+
+               if (userThread) {
+                   if (userThread.archived) {
+                       await this.manageThreadArchiving(logChannel);
+                       await userThread.setArchived(false);
+                   }
+                   this.threadCache.set(userId, userThread);
+                   this.lastThreadActivity.set(userId, Date.now());
+                   return userThread;
+               }
+
+               await this.manageThreadArchiving(logChannel);
+               const logTag = logChannel.availableTags.find(tag => tag.name === 'Log');
+               const initialTags = logTag ? [logTag.id] : [];
+
+               userThread = await logChannel.threads.create({
+                   name: threadName,
+                   message: {
+                       embeds: [
+                           new EmbedBuilder()
+                               .setTitle(`Log: ${userTag}`)
+                               .setDescription(`User ID: ${userId}\n<@${userId}>`)
+                               .setColor(this.colors.INFO)
+                               .setTimestamp()
+                       ]
+                   },
+                   autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+                   reason: `Logging history for ${userTag}`,
+                   appliedTags: initialTags
+               });
+
+               this.threadCache.set(userId, userThread);
+               this.lastThreadActivity.set(userId, Date.now());
+               return userThread;
+
+           } finally {
+               await this.releaseLock(lockKey, userId);
+           }
+
+       } catch (error) {
+           console.error(`Failed to get/create thread for user ${userId}:`, error);
+           throw error;
+       }
+   }
+
+   async getOrCreateGeneralThread(logChannel) {
+    const lockKey = 'general_thread_creation';
+    const threadName = 'General Logs';
+
+    try {
+        let lockAcquired = await this.acquireLock(lockKey, 'general');
+        if (!lockAcquired) {
+            throw new Error('Failed to acquire general thread lock');
+        }
+
         try {
-            // Get all guilds the bot is in
-            for (const [guildId, guild] of this.client.guilds.cache) {
-                const settings = await guild.settings;
-                if (!settings?.log_channel_id) continue;
-    
-                const logChannel = await guild.channels.fetch(settings.log_channel_id)
-                    .catch(() => null);
-                
-                if (!logChannel || logChannel.type !== ChannelType.GuildForum) continue;
-    
-                // Get all active threads
-                const threads = await logChannel.threads.fetchActive();
-                
-                for (const [threadId, thread] of threads.threads) {
-                    // Extract user ID from thread name
-                    const userIdMatch = thread.name.match(/\((\d+)\)/);
-                    if (!userIdMatch) continue;
-    
-                    const userId = userIdMatch[1];
-                    
-                    // Check user's current status and update tags
-                    await this.updateThreadTags(thread, logChannel, userId);
-                }
-            }
-        } catch (error) {
-            console.error('Error during tag cleanup:', error);
-        }
-    }
+            const [activeThreads, archivedThreads] = await Promise.all([
+                logChannel.threads.fetch(),
+                logChannel.threads.fetchArchived()
+            ]);
 
-    async getOrCreateGeneralThread(logChannel) {
-        try {
-            // Check for existing general thread
-            const generalThreadName = 'General Logs';
-            const activeThreads = await logChannel.threads.fetch();
             let generalThread = activeThreads.threads.find(thread => 
-                thread.name === generalThreadName
+                thread.name === threadName
             );
-    
+
             if (!generalThread) {
-                const archivedThreads = await logChannel.threads.fetchArchived();
                 generalThread = archivedThreads.threads.find(thread => 
-                    thread.name === generalThreadName
+                    thread.name === threadName
                 );
             }
-    
-            // If thread exists, unarchive if needed and return
+
             if (generalThread) {
                 if (generalThread.archived) {
                     await this.manageThreadArchiving(logChannel);
@@ -126,14 +237,13 @@ class LoggingService {
                 }
                 return generalThread;
             }
-    
-            // Create new thread if none exists
+
             await this.manageThreadArchiving(logChannel);
             const logTag = logChannel.availableTags.find(tag => tag.name === 'Log');
             const initialTags = logTag ? [logTag.id] : [];
-    
+
             generalThread = await logChannel.threads.create({
-                name: generalThreadName,
+                name: threadName,
                 message: {
                     content: `General log thread for events not associated with specific users\nCreated: <t:${Math.floor(Date.now() / 1000)}:F>`
                 },
@@ -141,748 +251,609 @@ class LoggingService {
                 reason: 'Creating general logs thread',
                 appliedTags: initialTags
             });
-    
+
             return generalThread;
-        } catch (error) {
-            console.error('Error getting/creating general thread:', error);
-            return null;
-        }
-    }
 
-    async updateThreadTags(thread, logChannel, userId) {
-        try {
-            const guild = logChannel.guild;
-            const member = await guild.members.fetch(userId).catch(() => null);
-            const ban = await guild.bans.fetch(userId).catch(() => null);
-            
-            // Get current timeout status if member exists
-            const isMuted = member?.isCommunicationDisabled();
-            
-            // Get all available tags
-            const bannedTag = logChannel.availableTags.find(t => t.name === 'Banned');
-            const mutedTag = logChannel.availableTags.find(t => t.name === 'Muted');
-            const logTag = logChannel.availableTags.find(t => t.name === 'Log');
-            
-            // Start with the Log tag
-            let newTags = logTag ? [logTag.id] : [];
-            
-            // Add appropriate status tags
-            if (ban && bannedTag) {
-                newTags.push(bannedTag.id);
-            }
-            if (isMuted && mutedTag) {
-                newTags.push(mutedTag.id);
-            }
-            
-            // Update the thread tags
-            await thread.setAppliedTags(newTags);
-        } catch (error) {
-            console.error('Error updating thread tags:', error);
+        } finally {
+            await this.releaseLock(lockKey, 'general');
         }
-    }
 
-    async getOrCreateUserThread(logChannel, userId, userTag) {
-        try {
-            // First check cache
-            const cachedThread = this.threadCache.get(userId);
-            if (cachedThread) {
-                try {
-                    // Verify thread still exists by trying to fetch it
-                    await cachedThread.fetch();
-                    
-                    if (cachedThread.archived) {
-                        await this.manageThreadArchiving(logChannel);
-                        await cachedThread.setArchived(false);
-                    }
-                    this.lastThreadActivity.set(userId, Date.now());
-                    return cachedThread;
-                } catch (error) {
-                    // Thread no longer exists, remove from cache
-                    this.threadCache.delete(userId);
-                    this.lastThreadActivity.delete(userId);
-                }
-            }
-    
-            try {
-                // Fetch all threads
-                const activeThreads = await logChannel.threads.fetch();
-                const archivedThreads = await logChannel.threads.fetchArchived();
-                
-                // Search by userId in the thread name pattern (userTag) (userId)
-                let userThread = activeThreads.threads.find(thread => 
-                    thread.name.endsWith(`(${userId})`)
-                ) || archivedThreads.threads.find(thread => 
-                    thread.name.endsWith(`(${userId})`)
-                );
-    
-                // If thread exists, update cache and return
-                if (userThread) {
-                    try {
-                        // Verify thread is still accessible
-                        await userThread.fetch();
-                        
-                        if (userThread.archived) {
-                            await this.manageThreadArchiving(logChannel);
-                            await userThread.setArchived(false);
-                        }
-                        this.threadCache.set(userId, userThread);
-                        this.lastThreadActivity.set(userId, Date.now());
-                        return userThread;
-                    } catch (error) {
-                        // Thread no longer accessible, will create new one
-                        userThread = null;
-                    }
-                }
-    
-                // Create new thread if none exists or previous one was inaccessible
-                await this.manageThreadArchiving(logChannel);
-                const logTag = logChannel.availableTags.find(tag => tag.name === 'Log');
-                const initialTags = logTag ? [logTag.id] : [];
-    
-                userThread = await logChannel.threads.create({
-                    name: `${userTag} (${userId})`,
-                    message: {
-                        embeds: [
-                            new EmbedBuilder()
-                                .setTitle(`Log: ${userTag}`)
-                                .setDescription(`User ID: ${userId}\n<@${userId}>`)
-                                .setColor('#5865F2')
-                        ]
-                    },
-                    autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
-                    reason: `Logging history for ${userTag}`,
-                    appliedTags: initialTags
-                });
-    
-                this.threadCache.set(userId, userThread);
-                this.lastThreadActivity.set(userId, Date.now());
-                return userThread;
-    
-            } catch (error) {
-                console.error(`Failed to get/create thread for user ${userId}:`, error);
-                throw error;
-            }
-        } catch (error) {
-            console.error(`Failed to get/create thread for user ${userId}:`, error);
-            throw error;
-        }
+    } catch (error) {
+        console.error('Error getting/creating general thread:', error);
+        return null;
     }
+}
 
-    async manageThreadArchiving(channel) {
-        const activeThreads = await channel.threads.fetch();
+async manageThreadArchiving(logChannel) {
+    try {
+        const activeThreads = await logChannel.threads.fetch();
         const activeCount = activeThreads.threads.size;
 
-        if (activeCount > 950) {
+        if (activeCount > this.MAX_ACTIVE_THREADS) {
             console.log(`Managing thread count. Current active threads: ${activeCount}`);
             
             const threadsByActivity = Array.from(this.lastThreadActivity.entries())
                 .sort(([, a], [, b]) => b - a);
 
-            const threadsToArchive = threadsByActivity.slice(500);
+            const threadsToArchive = threadsByActivity.slice(this.THREAD_ARCHIVE_BATCH);
             
-            for (const [userId] of threadsToArchive) {
-                const thread = this.threadCache.get(userId);
-                if (thread && !thread.archived) {
-                    await thread.send({
-                        content: '🔒 Thread automatically archived due to server thread limit. Will be unarchived when new logs arrive.'
-                    });
-                    await thread.setArchived(true);
-                    this.threadCache.delete(userId);
-                    this.lastThreadActivity.delete(userId);
-                }
-            }
-        }
-    }
-
-    // loggingService.js - logEvent method
-    async logEvent(guild, type, data, retryCount = 0) {
-        //console.log('Logging event type:', type);
-        const maxRetries = 3;
-    
-        try {
-            // Ensure guild settings are loaded
-            if (!guild.settings) {
-                guild.settings = await db.getServerSettings(guild.id);
-            }
-            
-            const logChannelId = guild.settings?.log_channel_id;
-            
-            if (!logChannelId) {
-                console.log(`No log channel ID found for guild ${guild.id}`);
-                return;
-            }
-    
-            // Try to fetch the channel
-            const logChannel = await guild.channels.fetch(logChannelId)
-                .catch(async err => {
-                    // If channel doesn't exist, clear it from settings
-                    if (err.code === 10003) { // Unknown Channel error code
-                        console.log(`Log channel ${logChannelId} no longer exists, clearing from settings`);
-                        const currentSettings = await db.getServerSettings(guild.id);
-                        if (currentSettings) {
-                            const updatedSettings = { ...currentSettings, log_channel_id: null };
-                            await db.updateServerSettings(guild.id, updatedSettings);
-                            guild.settings = updatedSettings; // Update cached settings
-                        }
-                    }
-                    console.log(`Failed to fetch log channel ${logChannelId}:`, err);
-                    return null;
-                });
-    
-            if (!logChannel) {
-                console.log(`Invalid log channel for guild ${guild.id}`);
-                return;
-            }
-    
-            // Verify channel permissions before proceeding
-            const botPermissions = logChannel.permissionsFor(guild.members.me);
-            const requiredPerms = ['ViewChannel', 'SendMessages', 'EmbedLinks'];
-            
-            if (logChannel.type === ChannelType.GuildForum) {
-                requiredPerms.push('ManageThreads', 'CreatePublicThreads');
-            }
-    
-            if (!requiredPerms.every(perm => botPermissions.has(perm))) {
-                console.log(`Missing required permissions in log channel for guild ${guild.id}`);
-                return;
-            }
-    
-            const embed = this.createLogEmbed(type, data);
-    
-            // Handle different channel types
-            if (logChannel.type === ChannelType.GuildForum) {
-                try {
-                    // Ensure forum channel has required tags
-                    if (!logChannel.availableTags.some(tag => tag.name === 'Log') ||
-                        !logChannel.availableTags.some(tag => tag.name === 'Banned') ||
-                        !logChannel.availableTags.some(tag => tag.name === 'Muted') ||
-                        !logChannel.availableTags.some(tag => tag.name === 'Reported')) {
-                        console.log('Initializing forum channel tags...');
-                        await this.initializeForumChannel(logChannel).catch(err => {
-                            console.error('Failed to initialize forum channel tags:', err);
-                        });
-                        // Refetch the channel to get updated tags
-                        await logChannel.fetch().catch(err => {
-                            console.error('Failed to refetch channel after tag initialization:', err);
-                            return;
-                        });
-                    }
-    
-                    if (!data.userId) {
-                        console.log('No user ID provided for forum logging');
-                        // For events that don't have a user ID, log to a general thread
-                        const generalThread = await this.getOrCreateGeneralThread(logChannel);
-                        if (generalThread) {
-                            await generalThread.send({ embeds: [embed] });
-                        }
-                        return;
-                    }
-    
-                    const thread = await this.getOrCreateUserThread(logChannel, data.userId, data.userTag)
-                        .catch(err => {
-                            console.error('Failed to get/create user thread:', err);
-                            return null;
-                        });
-    
-                    if (!thread) {
-                        console.log('Failed to get/create thread, attempting to log to channel directly');
-                        await logChannel.send({ embeds: [embed] });
-                        return;
-                    }
-    
-                    await thread.send({ embeds: [embed] });
-    
-                    // Handle thread tags
-                    try {
-                        const logTag = logChannel.availableTags.find(tag => tag.name === 'Log')?.id;
-                        const mutedTag = logChannel.availableTags.find(tag => tag.name === 'Muted')?.id;
-                        const bannedTag = logChannel.availableTags.find(tag => tag.name === 'Banned')?.id;
-                        const reportedTag = logChannel.availableTags.find(tag => tag.name === 'Reported')?.id;
-                        
-                        let newTags = [];
-                        if (logTag) newTags.push(logTag);
-    
-                        switch (type) {
-                            case 'BAN':
-                                if (bannedTag) newTags.push(bannedTag);
-                                break;
-                            case 'UNBAN':
-                                // Only keep log tag
-                                break;
-                            case 'MUTE':
-                                if (mutedTag) newTags.push(mutedTag);
-                                break;
-                            case 'UNMUTE':
-                                // Only keep log tag
-                                break;
-                            case 'REPORT_RESOLVE':
-                            case 'REPORT_DELETE':
-                                // Only keep log tag
-                                break;
-                            case 'REPORT_RECEIVED':
-                                if (reportedTag) newTags.push(reportedTag);
-                                break;
-                            default:
-                                // Check current user state
-                                const member = await guild.members.fetch(data.userId).catch(() => null);
-                                const ban = await guild.bans.fetch(data.userId).catch(() => null);
-                                
-                                if (ban && bannedTag) newTags.push(bannedTag);
-                                if (member?.communicationDisabledUntil && 
-                                    new Date(member.communicationDisabledUntil) > new Date() && 
-                                    mutedTag) {
-                                    newTags.push(mutedTag);
-                                }
-    
-                                const hasActiveReports = await db.hasActiveReports(data.userId, guild.id);
-                                if (hasActiveReports && reportedTag) {
-                                    newTags.push(reportedTag);
-                                }
-                        }
-    
-                        // Remove duplicates and update if needed
-                        newTags = [...new Set(newTags)];
-                        const currentTags = thread.appliedTags;
-                        const needsUpdate = !currentTags.every(tag => newTags.includes(tag)) || 
-                                          !newTags.every(tag => currentTags.includes(tag));
-    
-                        if (needsUpdate) {
-                            await thread.setAppliedTags(newTags).catch(err => {
-                                console.error('Failed to update thread tags:', err);
+            const batchSize = 10;
+            for (let i = 0; i < threadsToArchive.length; i += batchSize) {
+                const batch = threadsToArchive.slice(i, i + batchSize);
+                await Promise.all(batch.map(async ([userId]) => {
+                    const thread = this.threadCache.get(userId);
+                    if (thread && !thread.archived) {
+                        try {
+                            await thread.send({
+                                content: '🔒 Thread automatically archived due to server thread limit. Will be unarchived when new logs arrive.'
                             });
+                            await thread.setLocked(true);
+                            await thread.setArchived(true);
+                            this.threadCache.delete(userId);
+                            this.lastThreadActivity.delete(userId);
+                        } catch (error) {
+                            console.error(`Error archiving thread for user ${userId}:`, error);
                         }
-                    } catch (error) {
-                        console.error('Error managing thread tags:', error);
                     }
-                } catch (error) {
-                    console.error(`Error in forum channel handling (attempt ${retryCount + 1}):`, error);
-                    
-                    if (retryCount < maxRetries) {
-                        const delay = Math.pow(2, retryCount) * 1000;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        return this.logEvent(guild, type, data, retryCount + 1);
-                    }
-                }
-            } else if (logChannel.type === ChannelType.GuildText) {
-                try {
-                    // For text channels, include user information in the embed if available
-                    if (data.userId) {
-                        const userMention = `<@${data.userId}> (${data.userTag || data.userId})`;
-                        embed.setDescription(`User: ${userMention}\n${embed.data.description || ''}`);
-                    }
-                    
-                    await logChannel.send({ embeds: [embed] }).catch(err => {
-                        console.error('Failed to send message to text channel:', err);
-                    });
-                } catch (error) {
-                    console.error('Error logging to text channel:', error);
-                }
-            }
-    
-        } catch (error) {
-            console.error(`Error in logEvent (attempt ${retryCount + 1}):`, error);
-            
-            if (retryCount < maxRetries) {
-                const delay = Math.pow(2, retryCount) * 1000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-                return this.logEvent(guild, type, data, retryCount + 1);
+                }));
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
+    } catch (error) {
+        console.error('Error managing thread archiving:', error);
     }
+}
 
-    createLogEmbed(type, data) {
-        const embed = new EmbedBuilder()
-            .setTimestamp();
+async updateThreadTags(thread, logChannel, userId) {
+    try {
+        const guild = logChannel.guild;
+        
+        const [member, ban, hasActiveReports] = await Promise.all([
+            guild.members.fetch(userId).catch(() => null),
+            guild.bans.fetch(userId).catch(() => null),
+            db.hasActiveReports(userId, guild.id)
+        ]);
+        
+        const logTag = logChannel.availableTags.find(t => t.name === 'Log')?.id;
+        const bannedTag = logChannel.availableTags.find(t => t.name === 'Banned')?.id;
+        const mutedTag = logChannel.availableTags.find(t => t.name === 'Muted')?.id;
+        const reportedTag = logChannel.availableTags.find(t => t.name === 'Reported')?.id;
+        
+        let newTags = [];
+        if (logTag) newTags.push(logTag);
+        if (ban && bannedTag) newTags.push(bannedTag);
+        if (member?.communicationDisabledUntil > new Date() && mutedTag) {
+            newTags.push(mutedTag);
+        }
+        if (hasActiveReports && reportedTag) newTags.push(reportedTag);
+        
+        newTags = [...new Set(newTags)];
+        
+        const currentTags = thread.appliedTags;
+        const needsUpdate = !currentTags.every(tag => newTags.includes(tag)) || 
+                          !newTags.every(tag => currentTags.includes(tag));
 
-        switch (type) {
-            // User Events
-            case 'USER_JOIN':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('User Joined')
-                    .setDescription(`Account Created: <t:${Math.floor(data.createdAt / 1000)}:R>`);
-                break;
+        if (needsUpdate) {
+            await thread.setAppliedTags(newTags);
+        }
+    } catch (error) {
+        console.error('Error updating thread tags:', error);
+    }
+}
 
-            case 'USER_LEAVE':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('User Left')
-                    .setDescription(`Joined Server: <t:${Math.floor(data.joinedAt / 1000)}:R>`);
-                break;
+async logEvent(guild, type, data, retryCount = 0) {
+    const maxRetries = 3;
 
-            // Message Events
-            case 'MESSAGE_EDIT':
-                embed
-                    .setColor('#FFA500')
-                    .setTitle('Message Edited')
-                    .setDescription(`Message edited in <#${data.channelId}> [Jump to Message](${data.messageUrl})`)
-                    .addFields(
-                        { 
-                            name: 'Before', 
-                            value: data.oldContent?.length > 1024 ? 
-                                data.oldContent.substring(0, 1021) + '...' : 
-                                data.oldContent || 'Unknown',
-                            inline: false 
-                        },
-                        { 
-                            name: 'After', 
-                            value: data.newContent?.length > 1024 ? 
-                                data.newContent.substring(0, 1021) + '...' : 
-                                data.newContent || 'Unknown',
-                            inline: false 
-                        }
-                    )
-                    .setTimestamp();
-                break;
+    try {
+        if (!guild.settings) {
+            guild.settings = await db.getServerSettings(guild.id);
+        }
+        
+        const logChannelId = guild.settings?.log_channel_id;
+        if (!logChannelId) {
+            return;
+        }
 
-            case 'MESSAGE_DELETE':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('Message Deleted')
-                    .setDescription(`Message deleted in <#${data.channelId}>`)
-                    .addFields(
-                        { 
-                            name: 'Content', 
-                            value: data.content?.length > 1024 ? 
-                                data.content.substring(0, 1021) + '...' : 
-                                data.content || 'Unknown',
-                            inline: false 
-                        }
-                    );
-                
-                if (data.attachments?.length > 0) {
-                    embed.addFields({
-                        name: 'Attachments',
-                        value: data.attachments.join('\n')
-                    });
+        const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
+        if (!logChannel) {
+            if (guild.settings.log_channel_id) {
+                const updatedSettings = { ...guild.settings, log_channel_id: null };
+                await db.updateServerSettings(guild.id, updatedSettings);
+                guild.settings = updatedSettings;
+            }
+            return;
+        }
+
+        const botPermissions = logChannel.permissionsFor(guild.members.me);
+        const requiredPerms = ['ViewChannel', 'SendMessages', 'EmbedLinks'];
+        if (logChannel.type === ChannelType.GuildForum) {
+            requiredPerms.push('ManageThreads', 'CreatePublicThreads');
+        }
+
+        if (!requiredPerms.every(perm => botPermissions.has(perm))) {
+            return;
+        }
+
+        const embed = this.createLogEmbed(type, data);
+
+        if (logChannel.type === ChannelType.GuildForum) {
+            try {
+                if (!logChannel.availableTags.some(tag => tag.name === 'Log')) {
+                    await this.initializeForumChannel(logChannel);
+                    await logChannel.fetch();
                 }
-                break;
 
-            case 'MESSAGE_FILTER_DELETE':
-                embed
-                    .setColor('#FF6B6B')
-                    .setTitle('Message Auto-Deleted')
-                    .setDescription(`Message automatically deleted in <#${data.channelId}>`)
-                    .addFields(
-                        { name: 'Author', value: `<@${data.userId}> (${data.userTag})` },
-                        { name: 'Reason', value: `Filtered ${data.filterType}: ${data.term}` },
-                        { 
-                            name: 'Content', 
-                            value: data.content?.length > 1024 ? 
-                                data.content.substring(0, 1021) + '...' : 
-                                data.content || 'No content'
-                        }
-                    );
-                break;
+                if (!data.userId) {
+                    const generalThread = await this.getOrCreateGeneralThread(logChannel);
+                    if (generalThread) {
+                        await generalThread.send({ embeds: [embed] });
+                    }
+                    return;
+                }
 
-            // Voice Events
-            case 'VOICE_JOIN':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('Voice Channel Joined')
-                    .setDescription(`Joined voice channel <#${data.channelId}>`);
-                break;
+                const thread = await this.getOrCreateUserThread(
+                    logChannel, 
+                    data.userId, 
+                    data.userTag
+                );
 
-            case 'VOICE_LEAVE':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('Voice Channel Left')
-                    .setDescription(`Left voice channel <#${data.channelId}>`);
-                break;
+                if (!thread) {
+                    await logChannel.send({ embeds: [embed] });
+                    return;
+                }
 
-            case 'VOICE_MOVE':
+                await thread.send({ embeds: [embed] });
+                await this.updateThreadTags(thread, logChannel, data.userId);
+
+            } catch (error) {
+                console.error(`Error in forum channel handling (attempt ${retryCount + 1}):`, error);
+                
+                if (retryCount < maxRetries) {
+                    const delay = Math.pow(2, retryCount) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return this.logEvent(guild, type, data, retryCount + 1);
+                }
+            }
+        } else if (logChannel.type === ChannelType.GuildText) {
+            try {
+                if (data.userId) {
+                    const userMention = `<@${data.userId}> (${data.userTag || data.userId})`;
+                    embed.setDescription(`User: ${userMention}\n${embed.data.description || ''}`);
+                }
+                
+                await logChannel.send({ embeds: [embed] });
+            } catch (error) {
+                console.error('Error logging to text channel:', error);
+            }
+        }
+
+    } catch (error) {
+        console.error(`Error in logEvent (attempt ${retryCount + 1}):`, error);
+        
+        if (retryCount < maxRetries) {
+            const delay = Math.pow(2, retryCount) * 1000;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return this.logEvent(guild, type, data, retryCount + 1);
+        }
+    }
+}
+
+cleanCache() {
+    const now = Date.now();
+    const maxAge = this.THREAD_CLEANUP_INTERVAL;
+
+    for (const [userId, lastActivity] of this.lastThreadActivity.entries()) {
+        if (now - lastActivity > maxAge) {
+            const thread = this.threadCache.get(userId);
+            if (thread && !thread.archived) {
+                thread.setArchived(true).catch(console.error);
+            }
+            this.threadCache.delete(userId);
+            this.lastThreadActivity.delete(userId);
+        }
+    }
+}
+
+createModerationEmbed(embed, type, data) {
+    switch(type) {
+        case 'BAN':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('User Banned')
+                .setDescription(`${data.userTag} was banned from the server`)
+                .addFields(
+                    { name: 'User ID', value: data.userId, inline: true },
+                    { name: 'Banned By', value: data.modTag, inline: true },
+                    { name: 'Reason', value: data.reason }
+                );
+            
+            if (data.warningCount) {
+                embed.addFields({ 
+                    name: 'Warning Count', 
+                    value: data.warningCount.toString(), 
+                    inline: true 
+                });
+            }
+            
+            if (data.channelId) {
+                embed.addFields({ 
+                    name: 'Channel', 
+                    value: `<#${data.channelId}>`, 
+                    inline: true 
+                });
+            }
+            
+            if (data.deleteMessageDays) {
+                embed.addFields({ 
+                    name: 'Message Deletion', 
+                    value: `${data.deleteMessageDays} days`, 
+                    inline: true 
+                });
+            }
+            break;
+
+        case 'UNBAN':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('User Unbanned')
+                .setDescription(`User was unbanned from the server`)
+                .addFields(
+                    { name: 'Unbanned By', value: data.modTag },
+                    { name: 'Reason', value: data.reason || 'No reason provided' }
+                );
+            break;
+
+        case 'KICK':
+            embed
+                .setColor(this.colors.WARNING)
+                .setTitle('User Kicked')
+                .setDescription(`User was kicked from the server`)
+                .addFields(
+                    { name: 'Kicked By', value: data.modTag },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'MUTE':
+            embed
+                .setColor(this.colors.WARNING)
+                .setTitle('User Muted')
+                .setDescription(`User was muted`)
+                .addFields(
+                    { name: 'Muted By', value: data.modTag },
+                    { name: 'Duration', value: data.duration },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'UNMUTE':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('User Unmuted')
+                .setDescription(`User was unmuted`)
+                .addFields(
+                    { name: 'Unmuted By', value: data.modTag },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'WARNING':
+            embed
+                .setColor(this.colors.WARNING)
+                .setTitle('Warning Received')
+                .setDescription(`User received a warning`)
+                .addFields(
+                    { name: 'Warned By', value: data.modTag },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'WARNINGS_CLEARED':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('Warnings Cleared')
+                .setDescription(`All warnings have been cleared for user`)
+                .addFields(
+                    { name: 'Cleared By', value: data.modTag },
+                    { name: 'Amount Cleared', value: `${data.warningsCleared} warnings` },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'WARNINGS_EXPIRED':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('Warnings Expired')
+                .setDescription('Warning(s) have automatically expired')
+                .addFields(
+                    { name: 'Amount Expired', value: `${data.warningsExpired} warning(s)` },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+    }
+}
+
+createContentFilterEmbed(embed, type, data) {
+    if (type === 'CONTENT_VIOLATION') {
+        embed
+            .setColor(this.colors[data.type] || this.colors.ERROR)
+            .setTitle(`${this.icons[data.type] || '⚠️'} Content Filter Violation - ${data.type}`)
+            .setDescription(`Message automatically deleted for prohibited content`);
+
+        const fields = [
+            { name: 'Author', value: `${data.userTag} (${data.userId})` },
+            { name: 'Channel', value: `<#${data.channelId}>` },
+            { 
+                name: 'Content', 
+                value: data.content?.length > 1024 ? 
+                    `${data.content.substring(0, 1021)}...` : 
+                    data.content 
+            },
+            { name: 'Matched Term/Domain', value: data.term }
+        ];
+
+        if (data.noPunishment) {
+            fields.push({ 
+                name: 'Note', 
+                value: '⚠️ Could not apply punishment - user has higher permissions' 
+            });
+        } else if (data.punishment) {
+            fields.push({ 
+                name: 'Action Taken', 
+                value: data.punishment === 'MUTE' ? 
+                    `Muted for 30 seconds (Warning ${data.warningCount}/${data.warningThreshold})` : 
+                    'Banned for exceeding warning threshold' 
+            });
+        }
+
+        embed.addFields(fields);
+
+    } else if (type === 'SUSPICIOUS_CONTENT') {
+        embed
+            .setColor(this.colors.WARNING)
+            .setTitle('⚠️ Suspicious Content')
+            .setDescription(`${data.modRoleId ? `<@&${data.modRoleId}> ` : ''}User posted suspicious content in <#${data.channelId}>`)
+            .addFields(
+                { 
+                    name: 'Content', 
+                    value: data.content.length > 1024 ? 
+                        `${data.content.substring(0, 1021)}...` : 
+                        data.content 
+                },
+                { name: 'Flagged Term', value: data.term },
+                { name: 'Message Link', value: data.messageUrl }
+            );
+    }
+}
+
+createTicketEmbed(embed, type, data) {
+    switch(type) {
+        case 'TICKET_CREATED':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('Ticket Created')
+                .setDescription(`Ticket #${data.ticketId} created`)
+                .addFields(
+                    { name: 'User', value: `${data.userTag} (${data.userId})` },
+                    { name: 'Content', value: data.content }
+                );
+            break;
+
+        case 'TICKET_CLOSED':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('Ticket Closed')
+                .setDescription(`Ticket #${data.ticketId} closed`)
+                .addFields(
+                    { name: 'Closed By', value: `<@${data.closedBy}>` },
+                    { name: 'Reason', value: data.reason || 'No reason provided' }
+                );
+            break;
+
+        case 'TICKET_DELETED':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('Ticket Deleted')
+                .setDescription(`Ticket #${data.ticketId} deleted`)
+                .addFields(
+                    { name: 'Deleted By', value: `<@${data.deletedBy}>` },
+                    { name: 'Reason', value: data.reason || 'No reason provided' }
+                );
+            break;
+    }
+}
+
+createReportEmbed(embed, type, data) {
+    switch(type) {
+        case 'REPORT_RECEIVED':
+            embed
+                .setColor(this.colors.WARNING)
+                .setTitle('User Reported')
+                .setDescription(`A user report was received`)
+                .addFields(
+                    { name: 'Reported By', value: data.reporterTag },
+                    { name: 'Type', value: data.type },
+                    { name: 'Reason', value: data.reason }
+                );
+            break;
+
+        case 'REPORT_RESOLVE':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('Report Resolved')
+                .setDescription(`Report ID: ${data.reportId}`)
+                .addFields(
+                    { name: 'Resolved By', value: data.resolvedBy },
+                    { name: 'Action Taken', value: data.action || 'No action specified' }
+                );
+            break;
+
+        case 'REPORT_DELETE':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('Report Deleted')
+                .setDescription(`Report ID: ${data.reportId}`)
+                .addFields(
+                    { name: 'Deleted By', value: data.deletedBy },
+                    { name: 'Reason', value: data.reason || 'No reason provided' }
+                );
+            break;
+    }
+}
+
+createLogEmbed(type, data) {
+    const embed = new EmbedBuilder().setTimestamp();
+
+    switch (type) {
+        case 'USER_JOIN':
+            embed
+                .setColor(this.colors.SUCCESS)
+                .setTitle('User Joined')
+                .setDescription(`Account Created: <t:${Math.floor(data.createdAt / 1000)}:R>`);
+            break;
+
+        case 'USER_LEAVE':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('User Left')
+                .setDescription(`Joined Server: <t:${Math.floor(data.joinedAt / 1000)}:R>`);
+            break;
+
+        case 'MESSAGE_EDIT':
+            embed
+                .setColor(this.colors.WARNING)
+                .setTitle('Message Edited')
+                .setDescription(`Message edited in <#${data.channelId}> [Jump to Message](${data.messageUrl})`)
+                .addFields(
+                    { 
+                        name: 'Before', 
+                        value: data.oldContent?.length > 1024 ? 
+                            `${data.oldContent.substring(0, 1021)}...` : 
+                            data.oldContent || 'Unknown',
+                        inline: false 
+                    },
+                    { 
+                        name: 'After', 
+                        value: data.newContent?.length > 1024 ? 
+                            `${data.newContent.substring(0, 1021)}...` : 
+                            data.newContent || 'Unknown',
+                        inline: false 
+                    }
+                );
+            break;
+
+        case 'MESSAGE_DELETE':
+            embed
+                .setColor(this.colors.ERROR)
+                .setTitle('Message Deleted')
+                .setDescription(`Message deleted in <#${data.channelId}>`)
+                .addFields(
+                    { 
+                        name: 'Content', 
+                        value: data.content?.length > 1024 ? 
+                            `${data.content.substring(0, 1021)}...` : 
+                            data.content || 'Unknown',
+                        inline: false 
+                    }
+                );
+            
+            if (data.attachments?.length > 0) {
+                embed.addFields({
+                    name: 'Attachments',
+                    value: data.attachments.join('\n')
+                });
+            }
+            break;
+
+        case 'VOICE_JOIN':
+        case 'VOICE_LEAVE':
+        case 'VOICE_MOVE':
+            embed
+                .setColor(type === 'VOICE_JOIN' ? this.colors.SUCCESS : 
+                         type === 'VOICE_LEAVE' ? this.colors.ERROR : 
+                         this.colors.WARNING)
+                .setTitle(`Voice Channel ${type.split('_')[1].charAt(0) + type.split('_')[1].slice(1).toLowerCase()}`);
+
+            if (type === 'VOICE_MOVE') {
                 embed
-                    .setColor('#FFA500')
-                    .setTitle('Voice Channel Moved')
                     .setDescription('Moved between voice channels')
                     .addFields(
                         { name: 'From', value: `<#${data.oldChannelId}>` },
                         { name: 'To', value: `<#${data.newChannelId}>` }
                     );
-                break;
-
-            // Moderation Actions
-            case 'BAN':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('User Banned')
-                    .setDescription(`${data.userTag} was banned from the server`)
-                    .addFields(
-                        { name: 'User ID', value: data.userId, inline: true },
-                        { name: 'Banned By', value: data.modTag, inline: true },
-                        { name: 'Reason', value: data.reason }
-                    );
-                
-                if (data.warningCount) {
-                    embed.addFields({ 
-                        name: 'Warning Count', 
-                        value: data.warningCount.toString(), 
-                        inline: true 
-                    });
-                }
-                
-                if (data.channelId) {
-                    embed.addFields({ 
-                        name: 'Channel', 
-                        value: `<#${data.channelId}>`, 
-                        inline: true 
-                    });
-                }
-                
-                if (data.deleteMessageDays) {
-                    embed.addFields({ 
-                        name: 'Message Deletion', 
-                        value: `${data.deleteMessageDays} days`, 
-                        inline: true 
-                    });
-                }
-                break;
-
-            case 'UNBAN':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('User Unbanned')
-                    .setDescription(`User was unbanned from the server`)
-                    .addFields(
-                        { name: 'Unbanned By', value: data.modTag },
-                        { name: 'Reason', value: data.reason || 'No reason provided' }
-                    );
-                break;
-
-            case 'KICK':
-                embed
-                    .setColor('#FFA500')
-                    .setTitle('User Kicked')
-                    .setDescription(`User was kicked from the server`)
-                    .addFields(
-                        { name: 'Kicked By', value: data.modTag },
-                        { name: 'Reason', value: data.reason }
-                    );
-                break;
-
-            case 'MUTE':
-                embed
-                    .setColor('#FFA500')
-                    .setTitle('User Muted')
-                    .setDescription(`User was muted`)
-                    .addFields(
-                        { name: 'Muted By', value: data.modTag },
-                        { name: 'Duration', value: data.duration },
-                        { name: 'Reason', value: data.reason }
-                    );
-                break;
-
-            case 'UNMUTE':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('User Unmuted')
-                    .setDescription(`User was unmuted`)
-                    .addFields(
-                        { name: 'Unmuted By', value: data.modTag },
-                        { name: 'Reason', value: data.reason }
-                    );
-                break;
-
-                case 'WARNING':
-                    embed
-                        .setColor('#FFD700')
-                        .setTitle('Warning Received')
-                        .setDescription(`User received a warning`)  // Fixed
-                        .addFields(
-                            { name: 'Warned By', value: data.modTag },
-                            { name: 'Reason', value: data.reason }
-                        );
-                    break;
-
-                case 'WARNINGS_CLEARED':
-                    embed
-                        .setColor('#00FF00')
-                        .setTitle('Warnings Cleared')
-                        .setDescription(`All warnings have been cleared for user`)
-                        .addFields(
-                            { name: 'Cleared By', value: data.modTag },
-                            { name: 'Amount Cleared', value: `${data.warningsCleared} warnings` },
-                            { name: 'Reason', value: data.reason }
-                        );
-                    break;
-                    
-                    case 'WARNINGS_EXPIRED':
-                        embed
-                            .setColor('#00FF00')
-                            .setTitle('Warnings Expired')
-                            .setDescription('Warning(s) have automatically expired')
-                            .addFields(
-                                { name: 'Amount Expired', value: `${data.warningsExpired} warning(s)` },
-                                { name: 'Reason', value: data.reason }
-                            );
-                        break;
-
-            case 'OBLITERATE':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('User Obliterated')
-                    .setDescription(`User was obliterated from the server`)
-                    .addFields(
-                        { name: 'Obliterated By', value: data.modTag },
-                        { name: 'Reason', value: data.reason },
-                        { name: 'Messages Deleted', value: data.messagesDeleted.toString() }
-                    );
-                break;
-            
-            // Content Filter Events
-            case 'CONTENT_VIOLATION':
-            embed
-                .setColor(this.colors[data.type] || '#FF0000')
-                .setTitle(`${this.icons[data.type] || '⚠️'} Content Filter Violation - ${data.type}`)
-                .setDescription(`Message automatically deleted for prohibited content`);
-
-            const fields = [
-                { name: 'Author', value: `${data.userTag} (${data.userId})` },
-                { name: 'Channel', value: `<#${data.channelId}>` },
-                { 
-                    name: 'Content', 
-                    value: data.content?.length > 1024 ? 
-                        data.content.substring(0, 1021) + '...' : 
-                        data.content 
-                },
-                { name: 'Matched Term/Domain', value: data.term }
-            ];
-
-            if (data.noPunishment) {
-                fields.push({ name: 'Note', value: '⚠️ Could not apply punishment - user has higher permissions' });
-            } else if (data.punishment) {
-                fields.push({ 
-                    name: 'Action Taken', 
-                    value: data.punishment === 'MUTE' ? 
-                        `Muted for 30 seconds (Warning ${data.warningCount}/${data.warningThreshold})` : 
-                        'Banned for exceeding warning threshold' 
-                });
+            } else {
+                embed.setDescription(`${type === 'VOICE_JOIN' ? 'Joined' : 'Left'} voice channel <#${data.channelId}>`);
             }
-
-            embed.addFields(fields);
             break;
+
+        case 'BAN':
+        case 'UNBAN':
+        case 'KICK':
+        case 'MUTE':
+        case 'UNMUTE':
+        case 'WARNING':
+        case 'WARNINGS_CLEARED':
+        case 'WARNINGS_EXPIRED':
+            this.createModerationEmbed(embed, type, data);
+            break;
+
+        case 'CONTENT_VIOLATION':
+        case 'SUSPICIOUS_CONTENT':
+            this.createContentFilterEmbed(embed, type, data);
+            break;
+
+        case 'TICKET_CREATED':
+        case 'TICKET_CLOSED':
+        case 'TICKET_DELETED':
+            this.createTicketEmbed(embed, type, data);
+            break;
+
+        case 'REPORT_RECEIVED':
+        case 'REPORT_RESOLVE':
+        case 'REPORT_DELETE':
+            this.createReportEmbed(embed, type, data);
+            break;
+
+        case 'ROLE_ADD':
+        case 'ROLE_REMOVE':
+            embed
+                .setColor(type === 'ROLE_ADD' ? this.colors.SUCCESS : this.colors.ERROR)
+                .setTitle(`Role ${type === 'ROLE_ADD' ? 'Added' : 'Removed'}`)
+                .setDescription(`A role was ${type === 'ROLE_ADD' ? 'added to' : 'removed from'} the user`)
+                .addFields(
+                    { name: 'Role', value: data.roleName },
+                    { name: 'Reason', value: data.reason || 'No reason provided' }
+                );
+            break;
+
+        case 'COMMAND_USE':
+            embed
+                .setColor(this.colors.INFO)
+                .setTitle('Command Used')
+                .setDescription(`Command used in <#${data.channelId}>`)
+                .addFields(
+                    { name: 'Command', value: `/${data.commandName}` }
+                );
             
-            case 'SUSPICIOUS_CONTENT':
-                embed
-                    .setColor('#FFA500')
-                    .setTitle('⚠️ Suspicious Content')
-                    .setDescription(`${data.modRoleId ? `<@&${data.modRoleId}> ` : ''}User posted suspicious content <#${data.channelId}>`)
-                    .addFields(
-                        { name: 'Content', value: data.content.length > 1024 ? 
-                            data.content.substring(0, 1021) + '...' : 
-                            data.content 
-                        },
-                        { name: 'Flagged Term', value: data.term },
-                        { name: 'Message Link', value: data.messageUrl }
-                    );
-                break;
-
-            // Role Events
-            case 'ROLE_ADD':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('Role Added')
-                    .setDescription(`A role was added to the user`)
-                    .addFields(
-                        { name: 'Role', value: data.roleName },
-                        { name: 'Reason', value: data.reason || 'No reason provided' }
-                    );
-                break;
-
-            case 'ROLE_REMOVE':
-                embed
-                    .setColor('#FF0000')
-                    .setTitle('Role Removed')
-                    .setDescription(`A role was removed from the user`)
-                    .addFields(
-                        { name: 'Role', value: data.roleName },
-                        { name: 'Reason', value: data.reason || 'No reason provided' }
-                    );
-                break;
-
-            // Report Events
-            case 'REPORT_RECEIVED':
-                embed
-                    .setColor('#FF6B6B')
-                    .setTitle('User Reported')
-                    .setDescription(`A user report was received`)
-                    .addFields(
-                        { name: 'Reported By', value: data.reporterTag },
-                        { name: 'Type', value: data.type },
-                        { name: 'Reason', value: data.reason }
-                    );
-                break;
-
-            case 'REPORT_DELETE':
-                embed
-                    .setColor('#FF6B6B')
-                    .setTitle('Report Deleted')
-                    .setDescription(`Report ID: ${data.reportId}`);
-                break;
-
-            case 'REPORTS_CLEARED':
-                embed
-                    .setColor('#00FF00')
-                    .setTitle('Reports Cleared')
-                    .setDescription(`All resolved reports have been cleared for user`)
-                    .addFields(
-                        { name: 'Cleared By', value: data.modTag },
-                        { name: 'Amount Cleared', value: `${data.reportsCleared} report(s)` },
-                        { name: 'Reason', value: data.reason }
-                    );
-                break;
-
-            // Spam Events
-            case 'SPAM_WARNING':
-                embed
-                    .setColor('#FFA500')
-                    .setTitle('Spam Warning')
-                    .setDescription(`Warning ${data.warningCount}/${data.warningThreshold}`)
-                    .addFields(
-                        { name: 'Channel', value: `<#${data.channelId}>` },
-                        { name: 'Warnings Left', value: data.warningsLeft.toString() }
-                    );
-                break;
-
-            // Command Events
-            case 'COMMAND_USE':
-                embed
-                    .setColor('#0099FF')
-                    .setTitle('Command Used')
-                    .setDescription(`Command used in <#${data.channelId}>`)
-                    .addFields(
-                        { name: 'Command', value: `/${data.commandName}` }
-                    );
-                
-                if (data.options) {
-                    embed.addFields({ name: 'Options', value: data.options });
-                }
-                break;
-        }
-
-        return embed;
-    }
-
-    cleanCache() {
-        const now = Date.now();
-        const FOUR_HOURS = 4 * 60 * 60 * 1000;
-
-        for (const [userId, lastActivity] of this.lastThreadActivity.entries()) {
-            if (now - lastActivity > FOUR_HOURS) {
-                const thread = this.threadCache.get(userId);
-                if (thread && !thread.archived) {
-                    thread.setArchived(true).catch(console.error);
-                }
-                this.threadCache.delete(userId);
-                this.lastThreadActivity.delete(userId);
+            if (data.options) {
+                embed.addFields({ name: 'Options', value: data.options });
             }
-        }
+            break;
+
+        default:
+            embed
+                .setColor(this.colors.INFO)
+                .setTitle('Event Log')
+                .setDescription(`Unhandled event type: ${type}`);
     }
+
+    return embed;
+}
 }
 
 export const loggingService = new LoggingService();
 
 // Clean cache every hour
 setInterval(() => {
-    loggingService.cleanCache();
+loggingService.cleanCache();
 }, 60 * 60 * 1000);
