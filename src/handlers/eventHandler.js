@@ -7,6 +7,7 @@ import { initializeDomainLists } from '../utils/filterCache.js';
 import { loggingService } from '../utils/loggingService.js';
 import { checkModeratorRole } from '../utils/permissions.js';
 import { handleTicketReply } from '../utils/ticketService.js';
+import { sanitizeInput } from '../utils/sanitization.js';
 import db from '../database/index.js';
 import path from 'path';
 import fs from 'fs';
@@ -38,6 +39,27 @@ function checkTimeouts(client) {
         if (timeouts.size === 0) {
             activeTimeouts.delete(guildId);
         }
+    }
+}
+
+function cleanupTimeouts() {
+    const now = new Date();
+    let expiredCount = 0;
+    
+    for (const [guildId, timeouts] of activeTimeouts.entries()) {
+        for (const [userId, timeoutData] of timeouts.entries()) {
+            if (now >= timeoutData.expiresAt) {
+                timeouts.delete(userId);
+                expiredCount++;
+            }
+        }
+        if (timeouts.size === 0) {
+            activeTimeouts.delete(guildId);
+        }
+    }
+    
+    if (expiredCount > 0) {
+        console.log(`Cleaned up ${expiredCount} expired timeouts`);
     }
 }
 
@@ -80,7 +102,17 @@ async function updateUserThreadTags(guild, userId, userTag = null) {
             }
         }
     } catch (error) {
-        console.error('Error updating user thread tags:', error);
+        if (error.code === 50013) {
+            console.error('Missing permissions to update thread tags:', error.message);
+        } else if (error.code === 10008) {
+            console.error('Thread no longer exists:', error.message);
+        } else {
+            console.error('Error updating user thread tags:', {
+                error: error.message,
+                userId: userId,
+                guildId: guild.id
+            });
+        }
     }
 }
 
@@ -105,17 +137,31 @@ async function handleTimeoutExpiration(guild, userId, userTag) {
                 }
             });
         } catch (error) {
-            console.error('Error fetching user for DM:', error);
+            if (error.code === 10013) {
+                console.error('Error fetching user for DM - user no longer exists:', error.message);
+            } else {
+                console.error('Error fetching user for DM:', {
+                    error: error.message,
+                    userId: userId,
+                    guildId: guild.id
+                });
+            }
         }
         await updateUserThreadTags(guild, userId, userTag);
     } catch (error) {
-        console.error('Error handling timeout expiration:', error);
+        console.error('Error handling timeout expiration:', {
+            error: error.message,
+            userId: userId,
+            guildId: guild.id
+        });
     }
 }
 
 export async function initHandlers(client) {
     initMistral();
     setInterval(() => checkTimeouts(client), 1000);
+    setInterval(cleanupTimeouts, 5 * 60 * 1000); // Every 5 minutes
+    
     client.once('ready', async () => {
         console.log(`Logged in as ${client.user.tag}!`);
         const getStatuses = (client) => [
@@ -224,7 +270,7 @@ export async function initHandlers(client) {
                                 welcomeMessages.filter(msg => msg !== lastMessages[0])[
                                     Math.floor(Math.random() * (welcomeMessages.length - 1))
                                 ];
-                            const formattedMessage = messageToUse.replace(/\{user\}/g, member.toString());
+                            const formattedMessage = sanitizeInput(messageToUse.replace(/\{user\}/g, member.toString()));
                             await db.addWelcomeMessageToHistory(guild.id, messageToUse);
                             const welcomeEmbed = new EmbedBuilder()
                                 .setColor('#00FF00')
@@ -240,7 +286,15 @@ export async function initHandlers(client) {
                             await welcomeChannel.send({ embeds: [welcomeEmbed] });
                         }
                     } catch (error) {
-                        console.error('Error in welcome message handling:', error);
+                        if (error.code === 50013) {
+                            console.error('Missing permissions for welcome message:', error.message);
+                        } else {
+                            console.error('Error in welcome message handling:', {
+                                error: error.message,
+                                userId: member.id,
+                                guildId: guild.id
+                            });
+                        }
                     }
                 }
             }
@@ -265,10 +319,22 @@ export async function initHandlers(client) {
                     }
                 }
             } catch (error) {
-                console.error('Error checking time-based roles for new member:', error);
+                if (error.code === 50013) {
+                    console.error('Missing permissions to add time-based roles:', error.message);
+                } else {
+                    console.error('Error checking time-based roles for new member:', {
+                        error: error.message,
+                        userId: member.id,
+                        guildId: guild.id
+                    });
+                }
             }
         } catch (error) {
-            console.error('Error handling new member:', error);
+            console.error('Error handling new member:', {
+                error: error.message,
+                userId: member.id,
+                guildId: member.guild.id
+            });
         }
     });
 
@@ -290,54 +356,13 @@ export async function initHandlers(client) {
                 });
             }
         } catch (error) {
-            console.error('Error handling member leave:', error);
+            console.error('Error handling member leave:', {
+                error: error.message,
+                userId: member.id,
+                guildId: member.guild.id
+            });
         }
     });
-
-    setInterval(async () => {
-        try {
-            const guilds = client.guilds.cache.values();
-            for (const guild of guilds) {
-                const roles = await db.getTimeBasedRoles(guild.id);
-                if (roles.length === 0) continue;
-                roles.sort((a, b) => b.days_required - a.days_required);
-                const members = await guild.members.fetch();
-                const batchSize = 10;
-                const memberBatches = Array.from(members.values())
-                    .filter(member => !member.user.bot)
-                    .reduce((batches, member, i) => {
-                        const batchIndex = Math.floor(i / batchSize);
-                        if (!batches[batchIndex]) batches[batchIndex] = [];
-                        batches[batchIndex].push(member);
-                        return batches;
-                    }, []);
-                for (const batch of memberBatches) {
-                    await Promise.all(batch.map(async member => {
-                        const memberDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
-                        for (const roleConfig of roles) {
-                            if (memberDays >= roleConfig.days_required) {
-                                const role = guild.roles.cache.get(roleConfig.role_id);
-                                if (!role) continue;
-                                if (!member.roles.cache.has(role.id)) {
-                                    await member.roles.add(role);
-                                    await loggingService.logEvent(guild, 'ROLE_ADD', {
-                                        userId: member.id,
-                                        roleId: role.id,
-                                        roleName: role.name,
-                                        userTag: member.user.tag,
-                                        reason: `Time-based role after ${memberDays} days`
-                                    });
-                                }
-                            }
-                        }
-                    }));
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            }
-        } catch (error) {
-            console.error('Error in time-based role check:', error);
-        }
-    }, 24 * 60 * 60 * 1000);
  
     client.on('messageUpdate', async (oldMessage, newMessage) => {
         if (oldMessage.author?.bot || !oldMessage.guild) return;
@@ -348,8 +373,8 @@ export async function initHandlers(client) {
             userTag: oldMessage.author.tag,
             channelId: oldMessage.channel.id,
             messageId: oldMessage.id,
-            oldContent: oldMessage.content,
-            newContent: newMessage.content,
+            oldContent: sanitizeInput(oldMessage.content),
+            newContent: sanitizeInput(newMessage.content),
             messageUrl: newMessage.url
         });
     });
@@ -362,7 +387,7 @@ export async function initHandlers(client) {
             userTag: message.author.tag,
             channelId: message.channel.id,
             messageId: message.id,
-            content: message.content,
+            content: sanitizeInput(message.content),
             attachments: message.attachments.size > 0 ? 
                 Array.from(message.attachments.values()).map(a => a.url) : 
                 []
@@ -396,7 +421,14 @@ export async function initHandlers(client) {
                 });
             }
         } catch (error) {
-            console.error('Error handling voice state update:', error);
+            if (error.code === 50013) {
+                console.error('Missing permissions for voice state logging:', error.message);
+            } else {
+                console.error('Error handling voice state update:', {
+                    error: error.message,
+                    guild: (oldState.guild || newState.guild).id
+                });
+            }
         }
     });
  
@@ -443,7 +475,15 @@ export async function initHandlers(client) {
                 await updateUserThreadTags(newMember.guild, newMember.id, newMember.user.tag);
             }
         } catch (error) {
-            console.error('Error handling member update:', error);
+            if (error.code === 50013) {
+                console.error('Missing permissions for member update logging:', error.message);
+            } else {
+                console.error('Error handling member update:', {
+                    error: error.message,
+                    userId: newMember.id,
+                    guildId: newMember.guild.id
+                });
+            }
         }
     });
  
@@ -477,7 +517,17 @@ export async function initHandlers(client) {
                 }
             }
         } catch (error) {
-            console.error('Error handling ban removal:', error);
+            if (error.code === 50013) {
+                console.error('Missing permissions for ban removal update:', error.message);
+            } else if (error.code === 10008) {
+                console.error('Thread no longer exists for ban removal update:', error.message);
+            } else {
+                console.error('Error handling ban removal:', {
+                    error: error.message,
+                    userId: ban.user.id,
+                    guildId: ban.guild.id
+                });
+            }
         }
     });
  
@@ -544,11 +594,24 @@ export async function initHandlers(client) {
                         });
                     }
                 } catch (error) {
-                    console.error('Error handling role button:', error);
-                    await interaction.reply({
-                        content: 'There was an error managing your roles. Please try again later.',
-                        ephemeral: true
-                    });
+                    if (error.code === 50013) {
+                        console.error('Missing permissions to manage roles:', error.message);
+                        await interaction.reply({
+                            content: 'I don\'t have permission to manage this role. Please contact a server administrator.',
+                            ephemeral: true
+                        });
+                    } else {
+                        console.error('Error handling role button:', {
+                            error: error.message,
+                            userId: member.id,
+                            guildId: interaction.guild.id,
+                            roleId: roleId
+                        });
+                        await interaction.reply({
+                            content: 'There was an error managing your roles. Please try again later.',
+                            ephemeral: true
+                        });
+                    }
                 }
             }
             else if (interaction.customId === 'resolve_report' || interaction.customId === 'delete_report') {
@@ -626,7 +689,11 @@ export async function initHandlers(client) {
                                         inline: true
                                     })
                                     .setTimestamp();
-                                await reporter.send({ embeds: [dmEmbed] }).catch(() => null);
+                                
+                                // Add DM rate limiting
+                                if (await canSendDM(reporter.id)) {
+                                    await reporter.send({ embeds: [dmEmbed] }).catch(() => null);
+                                }
                             }
                         }
                         await reportMessage.edit({
@@ -649,7 +716,11 @@ export async function initHandlers(client) {
                                         inline: true
                                     })
                                     .setTimestamp();
-                                await reporter.send({ embeds: [dmEmbed] }).catch(() => null);
+                                
+                                // Add DM rate limiting
+                                if (await canSendDM(reporter.id)) {
+                                    await reporter.send({ embeds: [dmEmbed] }).catch(() => null);
+                                }
                             }
                         }
                         await db.deleteReport(reportMessage.id);
@@ -687,7 +758,18 @@ export async function initHandlers(client) {
                         await reportMessage.delete();
                     }
                 } catch (error) {
-                    console.error('Error handling report action:', error);
+                    if (error.code === 50013) {
+                        console.error('Missing permissions to manage report:', error.message);
+                    } else if (error.code === 10008) {
+                        console.error('Report message no longer exists:', error.message);
+                    } else {
+                        console.error('Error handling report action:', {
+                            error: error.message,
+                            reportId: interaction.message?.id,
+                            guildId: interaction.guild?.id
+                        });
+                    }
+                    
                     if (!interaction.replied) {
                         await interaction.reply({
                             content: 'An error occurred while processing the report action.',
@@ -752,24 +834,68 @@ export async function initHandlers(client) {
     client.on('messageCreate', async (message) => {
         try {
             if (!message.author.bot) {
-                console.log('Checking message for ticket reply:', {
-                    channelName: message.channel.name,
-                    channelType: message.channel.type,
-                    parentName: message.channel.parent?.name
-                });
+                // Check for ticket replies
                 if (message.channel.isThread() && 
                     message.channel.parent?.name.toLowerCase() === 'tickets') {
-                    console.log('Processing ticket reply in thread');
                     await handleTicketReply(null, message);
                     return;
                 }
                 if (message.channel.type === ChannelType.GuildText && 
                     message.channel.parent?.name === 'Tickets') {
-                    console.log('Processing ticket reply in channel');
                     await handleTicketReply(null, message);
                     return;
                 }
+                
+                // Add time-based role check for active members
+                if (message.guild && message.member) {
+                    try {
+                        const roles = await db.getTimeBasedRoles(message.guild.id);
+                        if (roles.length > 0) {
+                            const memberDays = Math.floor((Date.now() - message.member.joinedTimestamp) / (1000 * 60 * 60 * 24));
+                            let roleAdded = false;
+                            
+                            for (const roleConfig of roles) {
+                                const role = message.guild.roles.cache.get(roleConfig.role_id);
+                                if (!role) continue;
+                                
+                                if (memberDays >= roleConfig.days_required && !message.member.roles.cache.has(role.id)) {
+                                    await message.member.roles.add(role);
+                                    roleAdded = true;
+                                    
+                                    await loggingService.logEvent(message.guild, 'ROLE_ADD', {
+                                        userId: message.member.id,
+                                        userTag: message.member.user.tag,
+                                        roleId: role.id,
+                                        roleName: role.name,
+                                        reason: `Time-based role after ${memberDays} days (message trigger)`
+                                    });
+                                }
+                            }
+                            
+                            // React with star emoji if any role was added
+                            if (roleAdded) {
+                                try {
+                                    await message.react('🌟');
+                                } catch (reactError) {
+                                    console.error('Error adding reaction:', reactError);
+                                    // Continue even if reaction fails
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        if (error.code === 50013) {
+                            console.error('Missing permissions to add time-based roles on message:', error.message);
+                        } else {
+                            console.error('Error checking time-based roles on message:', {
+                                error: error.message,
+                                userId: message.member.id,
+                                guildId: message.guild.id
+                            });
+                        }
+                    }
+                }
             }
+            
             if (message.author.bot || !message.guild) return;
             const wasFiltered = await checkMessage(message);
             if (wasFiltered) {
@@ -798,13 +924,13 @@ export async function initHandlers(client) {
                 const warningsLeft = (settings.warning_threshold + 1) - warningCount;
                 let warningMessage;
                 if (warningsLeft === 1) {
-                    warningMessage = settings.spam_warning_message
+                    warningMessage = sanitizeInput(settings.spam_warning_message
                         .replace('{warnings}', 'This is your last warning')
-                        .replace('{user}', message.author.toString());
+                        .replace('{user}', message.author.toString()));
                 } else {
-                    warningMessage = settings.spam_warning_message
+                    warningMessage = sanitizeInput(settings.spam_warning_message
                         .replace('{warnings}', `${warningsLeft} warnings remaining`)
-                        .replace('{user}', message.author.toString());
+                        .replace('{user}', message.author.toString()));
                 }
                 await message.reply(warningMessage);
                 await loggingService.logEvent(message.guild, 'SPAM_WARNING', {
@@ -829,12 +955,26 @@ export async function initHandlers(client) {
                             channelId: message.channel.id
                         });
                     } catch (error) {
-                        console.error('Error auto-banning user:', error);
+                        if (error.code === 50013) {
+                            console.error('Missing permissions to auto-ban user:', error.message);
+                            await message.channel.send(`Unable to ban ${message.author.tag} due to insufficient permissions. Please contact a server administrator.`);
+                        } else {
+                            console.error('Error auto-banning user:', {
+                                error: error.message,
+                                userId: message.author.id,
+                                guildId: message.guild.id
+                            });
+                        }
                     }
                 }
             }
         } catch (error) {
-            console.error('Error in message handler:', error);
+            console.error('Error in message handler:', {
+                error: error.message,
+                messageId: message.id,
+                channelId: message.channel.id,
+                guildId: message.guild?.id
+            });
         }
     });
  
@@ -850,6 +990,12 @@ export async function initHandlers(client) {
     client.on('guildCreate', async (guild) => {
         console.log(`Joined new guild: ${guild.name}`);
         try {
+            // Verify token is set
+            if (!process.env.DISCORD_TOKEN) {
+                console.error('DISCORD_TOKEN environment variable is not set!');
+                process.exit(1);
+            }
+            
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
             const coreCommands = Array.from(client.guildCommands.values())
                 .filter(cmd => cmd.pack === 'core');  
@@ -872,8 +1018,12 @@ export async function initHandlers(client) {
                 });
             if (inviter) {
                 try {
-                    await inviter.send({ embeds: [embed] });
-                    return;
+                    if (await canSendDM(inviter.id)) {
+                        await inviter.send({ embeds: [embed] });
+                        return;
+                    } else {
+                        console.log('DM rate limit reached for inviter, falling back to channel message');
+                    }
                 } catch (error) {
                     console.log('Could not DM inviter, falling back to channel message');
                 }
@@ -887,8 +1037,16 @@ export async function initHandlers(client) {
                 await channel.send({ embeds: [embed] });
             }
         } catch (error) {
-            console.error('Error setting up new guild:', error);
+            if (error.code === 50013) {
+                console.error('Missing permissions in new guild:', error.message);
+            } else {
+                console.error('Error setting up new guild:', {
+                    error: error.message,
+                    guildId: guild.id,
+                    guildName: guild.name
+                });
+            }
         }
     });
     console.log('Event handlers initialized');
- }
+}

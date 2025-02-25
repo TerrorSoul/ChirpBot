@@ -1,4 +1,3 @@
-// commands/packs/core/owner/utilities/setup.js
 import { 
     ApplicationCommandOptionType, 
     ChannelType, 
@@ -129,6 +128,26 @@ export const command = {
             type: ApplicationCommandOptionType.Boolean,
             description: 'Log suspicious messages for review',
             required: false
+        },
+        {
+            name: 'tickets_channel',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Channel for tickets (forum for community, text channel for others)',
+            required: false,
+            channel_types: [ChannelType.GuildForum, ChannelType.GuildText]
+        },
+        {
+            name: 'tickets_enable',
+            type: ApplicationCommandOptionType.Boolean,
+            description: 'Enable the ticket system',
+            required: false
+        },
+        {
+            name: 'tickets_category',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Category for ticket channels (non-community servers only)',
+            required: false,
+            channel_types: [ChannelType.GuildCategory]
         }
     ],
     execute: async (interaction) => {
@@ -159,6 +178,7 @@ export const command = {
             // Check channel permissions and types if channels are provided
             const logChannel = interaction.options.getChannel('log_channel');
             const welcomeChannel = interaction.options.getChannel('welcome_channel');
+            const ticketsChannel = interaction.options.getChannel('tickets_channel');
     
             if (logChannel) {
                 // Validate channel type based on server type
@@ -198,7 +218,38 @@ export const command = {
                     });
                 }
             }
-    
+
+            // Check tickets channel if provided
+            if (ticketsChannel) {
+                if (isCommunityServer && ticketsChannel.type !== ChannelType.GuildForum) {
+                    return interaction.reply({
+                        content: 'Community servers must use a forum channel for tickets.',
+                        ephemeral: true
+                    });
+                } else if (!isCommunityServer && ticketsChannel.type !== ChannelType.GuildText) {
+                    return interaction.reply({
+                        content: 'Non-community servers must use a text channel for tickets.',
+                        ephemeral: true
+                    });
+                }
+
+                const permissions = ticketsChannel.permissionsFor(interaction.client.user);
+                const requiredPerms = [
+                    'ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory'
+                ];
+
+                if (ticketsChannel.type === ChannelType.GuildForum) {
+                    requiredPerms.push('ManageThreads', 'CreatePublicThreads');
+                }
+
+                if (!requiredPerms.every(perm => permissions.has(perm))) {
+                    return interaction.reply({
+                        content: `I need the following permissions in the tickets channel: ${requiredPerms.join(', ')}`,
+                        ephemeral: true
+                    });
+                }
+            }
+
             const otherChannels = [welcomeChannel].filter(Boolean);
             for (const channel of otherChannels) {
                 const permissions = channel.permissionsFor(interaction.client.user);
@@ -261,7 +312,7 @@ export const command = {
     
                     if (response.customId === 'quick_setup') {
                         await response.update({
-                            content: 'Starting quick setup...',
+                            content: 'Running quick setup...',
                             components: []
                         });
                         settings = await quickSetup(interaction);
@@ -292,9 +343,9 @@ export const command = {
                 });
                 return;
             }
-    
             console.log('Updating server settings...');
             await db.updateServerSettings(interaction.guildId, settings);
+            interaction.guild.settings = await db.getServerSettings(interaction.guildId);
     
             if (settings.content_filter_enabled) {
                 const terms = await db.getFilteredTerms(interaction.guildId);
@@ -352,6 +403,7 @@ export const command = {
         }
     }
 };
+
 async function createLogChannel(guild, modRole) {
     try {
         // Force refresh guild to get current features
@@ -362,7 +414,6 @@ async function createLogChannel(guild, modRole) {
         let channelType = isCommunityServer ? ChannelType.GuildForum : ChannelType.GuildText;
         
         console.log(`Creating ${isCommunityServer ? 'forum' : 'text'} channel for logging`);
-        
         try {
             // Create the channel
             const logChannel = await guild.channels.create({
@@ -408,7 +459,9 @@ async function createLogChannel(guild, modRole) {
                         { name: 'Log', moderated: true },
                         { name: 'Banned', moderated: true },
                         { name: 'Muted', moderated: true },
-                        { name: 'Reported', moderated: true }
+                        { name: 'Reported', moderated: true },
+                        { name: 'Ticket', moderated: true },
+                        { name: 'Archive', moderated: true }
                     ]);
 
                     // Final delay after setting tags
@@ -456,7 +509,6 @@ async function createLogChannel(guild, modRole) {
 
             console.log(`Created channel ${verifiedChannel.name} (${verifiedChannel.id})`);
             return verifiedChannel;
-            
         } catch (channelError) {
             console.error('Error creating initial channel:', channelError);
             
@@ -520,7 +572,6 @@ async function quickSetup(interaction) {
     const contentFilterMessage = interaction.options.getString('content_filter_message') ?? 
         'Your message was removed because it contained inappropriate content.';
     const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious') ?? true;
-    
     if (!interaction.options.getString('command_packs')) {
         const allPacks = await db.getAllPacks();
         const nonCorePacks = allPacks
@@ -547,6 +598,8 @@ async function quickSetup(interaction) {
     let logChannel;
     const isCommunityServer = interaction.guild.features.includes('COMMUNITY');
     let reportsChannel = null;
+    let ticketsChannel = null;
+    let ticketsCategory = null;
     
     try {
         // Create and verify log channel
@@ -578,6 +631,70 @@ async function quickSetup(interaction) {
             });
             await new Promise(resolve => setTimeout(resolve, 2000));
             reportsChannel = await interaction.guild.channels.fetch(reportsChannel.id);
+        }
+
+        // Create tickets system for community servers
+        if (isCommunityServer) {
+            ticketsChannel = await interaction.guild.channels.create({
+                name: 'tickets',
+                type: ChannelType.GuildForum,
+                permissionOverwrites: [
+                    {
+                        id: interaction.guild.id,
+                        deny: ['ViewChannel']
+                    },
+                    {
+                        id: modRole.id,
+                        allow: ['ViewChannel', 'SendMessages', 'ManageThreads']
+                    },
+                    {
+                        id: interaction.client.user.id,
+                        allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory', 'ManageThreads', 'CreatePublicThreads']
+                    }
+                ],
+                reason: 'Bot setup - tickets forum'
+            });
+        } else {
+            // Create category for non-community servers
+            ticketsCategory = await interaction.guild.channels.create({
+                name: 'Tickets',
+                type: ChannelType.GuildCategory,
+                permissionOverwrites: [
+                    {
+                        id: interaction.guild.id,
+                        deny: ['ViewChannel']
+                    },
+                    {
+                        id: modRole.id,
+                        allow: ['ViewChannel', 'SendMessages', 'ManageChannels']
+                    },
+                    {
+                        id: interaction.client.user.id,
+                        allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory', 'ManageChannels']
+                    }
+                ]
+            });
+
+            // Create main tickets channel under category
+            ticketsChannel = await interaction.guild.channels.create({
+                name: 'tickets',
+                type: ChannelType.GuildText,
+                parent: ticketsCategory,
+                permissionOverwrites: [
+                    {
+                        id: interaction.guild.id,
+                        deny: ['ViewChannel']
+                    },
+                    {
+                        id: modRole.id,
+                        allow: ['ViewChannel', 'SendMessages']
+                    },
+                    {
+                        id: interaction.client.user.id,
+                        allow: ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory']
+                    }
+                ]
+            });
         }
 
         // Create welcome channel
@@ -621,7 +738,10 @@ async function quickSetup(interaction) {
             content_filter_enabled: contentFilterEnabled,
             content_filter_notify_user: contentFilterNotify,
             content_filter_log_suspicious: contentFilterSuspicious,
-            content_filter_notify_message: contentFilterMessage
+            content_filter_notify_message: contentFilterMessage,
+            tickets_channel_id: ticketsChannel.id,
+            tickets_category_id: ticketsCategory?.id,
+            tickets_enabled: true
         };
 
         // Save settings and wait
@@ -654,6 +774,9 @@ async function manualSetup(interaction) {
     const contentFilterNotify = interaction.options.getBoolean('content_filter_notify');
     const contentFilterMessage = interaction.options.getString('content_filter_message');
     const contentFilterSuspicious = interaction.options.getBoolean('content_filter_suspicious');
+    const ticketsChannel = interaction.options.getChannel('tickets_channel');
+    const ticketsEnabled = interaction.options.getBoolean('tickets_enable');
+    const ticketsCategory = interaction.options.getChannel('tickets_category');
     
     const settings = {};
     const isCommunityServer = interaction.guild.features.includes('COMMUNITY');
@@ -675,6 +798,24 @@ async function manualSetup(interaction) {
             if (!isCommunityServer) {
                 settings.reports_channel_id = logChannel.id;
             }
+        }
+
+        // Validate tickets channel
+        if (ticketsChannel) {
+            if (isCommunityServer && ticketsChannel.type !== ChannelType.GuildForum) {
+                throw new Error('Community servers must use a forum channel for tickets.');
+            } else if (!isCommunityServer && ticketsChannel.type !== ChannelType.GuildText) {
+                throw new Error('Non-community servers must use a text channel for tickets.');
+            }
+            settings.tickets_channel_id = ticketsChannel.id;
+        }
+
+        // Handle tickets category for non-community servers
+        if (!isCommunityServer && ticketsCategory) {
+            if (ticketsCategory.type !== ChannelType.GuildCategory) {
+                throw new Error('Tickets category must be a category channel.');
+            }
+            settings.tickets_category_id = ticketsCategory.id;
         }
 
         // Create mod role only if none provided and none existing
@@ -703,6 +844,7 @@ async function manualSetup(interaction) {
         if (contentFilterNotify !== null) settings.content_filter_notify_user = contentFilterNotify;
         if (contentFilterMessage !== null) settings.content_filter_notify_message = contentFilterMessage;
         if (contentFilterSuspicious !== null) settings.content_filter_log_suspicious = contentFilterSuspicious;
+        if (ticketsEnabled !== null) settings.tickets_enabled = ticketsEnabled;
 
         if (welcomeEnabled && !settings.welcome_messages) {
             settings.welcome_messages = JSON.stringify(WELCOME_MESSAGES);
@@ -779,7 +921,9 @@ async function createSetupSummaryEmbed(interaction, settings) {
             {
                 name: 'Channels',
                 value: `${settings.log_channel_id ? `Logs: <#${settings.log_channel_id}>` : 'No log channel set'}
-${settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : 'No welcome channel set'}`.trim(),
+${settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : 'No welcome channel set'}
+${settings.tickets_channel_id ? `Tickets: <#${settings.tickets_channel_id}>` : 'No tickets channel set'}
+${settings.tickets_category_id ? `Tickets Category: <#${settings.tickets_category_id}>` : ''}`.trim(),
                 inline: true
             },
             {
@@ -790,7 +934,8 @@ Command Cooldown: ${settings.cooldown_seconds}s
 Channel Restrictions: ${settings.channel_restrictions_enabled ? 'Enabled' : 'Disabled'}
 Content Filter: ${settings.content_filter_enabled ? 'Enabled' : 'Disabled'}
 Filter Notifications: ${settings.content_filter_notify_user ? 'Enabled' : 'Disabled'}
-Log Suspicious: ${settings.content_filter_log_suspicious ? 'Enabled' : 'Disabled'}`,
+Log Suspicious: ${settings.content_filter_log_suspicious ? 'Enabled' : 'Disabled'}
+Tickets System: ${settings.tickets_enabled ? 'Enabled' : 'Disabled'}`,
                 inline: true
             }
         );

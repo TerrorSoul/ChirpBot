@@ -72,16 +72,6 @@ export const command = {
                 ephemeral: true
             });
 
-            // Send temp confirmation message
-            const confirmMessage = await interaction.channel.send(
-                `${interaction.user} deleted ${deletedCount} messages from ${targetUser.tag}.`
-            );
-
-            // Delete the confirmation message after 2 seconds
-            setTimeout(() => {
-                confirmMessage.delete().catch(() => {});
-            }, 2000);
-
         } catch (error) {
             console.error('Error in purgeuser command:', error);
             const reply = interaction.deferred ? interaction.editReply : interaction.reply;

@@ -63,16 +63,6 @@ export const command = {
                ephemeral: true
            });
 
-           // send temp confirmation message
-           const confirmMessage = await interaction.channel.send(
-               `${interaction.user} deleted ${deletedCount} messages.`
-           );
-
-           // delete the confirmation message
-           setTimeout(() => {
-               confirmMessage.delete().catch(() => {});
-           }, 2000);
-
        } catch (error) {
            console.error('Error in purge command:', error);
            if (interaction.deferred) {

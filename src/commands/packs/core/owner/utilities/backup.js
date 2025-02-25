@@ -35,7 +35,11 @@ export const command = {
                     logChannel: interaction.guild.channels.cache.get(settings.log_channel_id)?.toJSON(),
                     reportsChannel: interaction.guild.channels.cache.get(settings.reports_channel_id)?.toJSON(),
                     welcomeChannel: settings.welcome_channel_id ? 
-                        interaction.guild.channels.cache.get(settings.welcome_channel_id)?.toJSON() : null
+                        interaction.guild.channels.cache.get(settings.welcome_channel_id)?.toJSON() : null,
+                    ticketsChannel: settings.tickets_channel_id ? 
+                        interaction.guild.channels.cache.get(settings.tickets_channel_id)?.toJSON() : null,
+                    ticketsCategory: settings.tickets_category_id ? 
+                        interaction.guild.channels.cache.get(settings.tickets_category_id)?.toJSON() : null
                 }
             };
 
@@ -85,7 +89,8 @@ export const command = {
                                     serverData.filteredTerms.suspicious.length)
                                })\n` +
                                `• Discord Entities (Roles & Channels)\n` +
-                               `• User Roles (${serverData.userRoles.length} members)`,
+                               `• User Roles (${serverData.userRoles.length} members)` +
+                               `• Ticket System: ${settings.tickets_enabled ? 'Enabled' : 'Disabled'}`,
                         inline: false 
                     }
                 );

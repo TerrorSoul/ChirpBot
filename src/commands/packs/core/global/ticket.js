@@ -124,7 +124,25 @@ export const command = {
     },
     execute: async (interaction) => {
         const subcommand = interaction.options.getSubcommand();
-
+        
+        if (subcommand === 'create') {
+            const settings = await db.getServerSettings(interaction.options.getString('server'));
+            if (!settings?.tickets_enabled) {
+                return interaction.reply({
+                    content: 'The ticket system is not enabled on this server.',
+                    ephemeral: true
+                });
+            }
+        } else {
+            const settings = await db.getServerSettings(interaction.guildId);
+            if (!settings?.tickets_enabled) {
+                return interaction.reply({
+                    content: 'The ticket system is not enabled on this server.',
+                    ephemeral: true
+                });
+            }
+        }
+    
         switch (subcommand) {
             case 'create':
                 await handleTicketCreate(interaction);

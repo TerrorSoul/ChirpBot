@@ -68,14 +68,15 @@ export const command = {
                 }
 
                 // Recreate channels if they don't exist
-                const channelTypes = ['logChannel', 'reportsChannel', 'welcomeChannel'];
+                const channelTypes = ['logChannel', 'reportsChannel', 'welcomeChannel', 'ticketsChannel'];
                 for (const channelType of channelTypes) {
                     const channelData = backupData.data.discordData.channels[channelType];
                     if (channelData) {
                         const settingKey = {
                             logChannel: 'log_channel_id',
                             reportsChannel: 'reports_channel_id',
-                            welcomeChannel: 'welcome_channel_id'
+                            welcomeChannel: 'welcome_channel_id',
+                            ticketsChannel: 'tickets_channel_id'
                         }[channelType];
 
                         const existingChannel = interaction.guild.channels.cache.get(channelData.id)
@@ -87,7 +88,7 @@ export const command = {
                         if (!existingChannel) {
                             const permissionOverwrites = [];
                             
-                            if (channelData.permissionOverwrites.includes(interaction.guild.id)) {
+                            if (channelData.permissionOverwrites && channelData.permissionOverwrites.includes(interaction.guild.id)) {
                                 permissionOverwrites.push({
                                     id: interaction.guild.id,
                                     deny: channelType === 'welcomeChannel' ? ['SendMessages'] : ['ViewChannel']
@@ -95,7 +96,7 @@ export const command = {
                             }
 
                             const modRoleId = createdEntities.modRole?.id || backupData.data.settings.mod_role_id;
-                            if (channelData.permissionOverwrites.includes(modRoleId)) {
+                            if (channelData.permissionOverwrites && channelData.permissionOverwrites.includes(modRoleId)) {
                                 permissionOverwrites.push({
                                     id: modRoleId,
                                     allow: ['ViewChannel', 'SendMessages']
@@ -104,10 +105,25 @@ export const command = {
 
                             const newChannel = await interaction.guild.channels.create({
                                 name: channelData.name,
-                                type: ChannelType.GuildText,
+                                type: channelData.type === ChannelType.GuildForum ? ChannelType.GuildForum : ChannelType.GuildText,
                                 permissionOverwrites: permissionOverwrites,
                                 position: channelData.rawPosition
                             });
+
+                            // Initialize forum channels if needed
+                            if (channelData.type === ChannelType.GuildForum) {
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                if (channelType === 'logChannel') {
+                                    await newChannel.setAvailableTags([
+                                        { name: 'Log', moderated: true },
+                                        { name: 'Banned', moderated: true },
+                                        { name: 'Muted', moderated: true },
+                                        { name: 'Reported', moderated: true },
+                                        { name: 'Ticket', moderated: true },
+                                        { name: 'Archive', moderated: true }
+                                    ]);
+                                }
+                            }
 
                             createdEntities.channels[channelType] = newChannel;
                             backupData.data.settings[settingKey] = newChannel.id;
@@ -117,127 +133,33 @@ export const command = {
                     }
                 }
 
-                // Import time-based roles - sort by days required to maintain hierarchy
-                if (backupData.data.timeBasedRoles?.length > 0) {
-                    const sortedRoles = backupData.data.timeBasedRoles.sort((a, b) => 
-                        b.days_required - a.days_required
-                    );
-                    
-                    for (const roleData of sortedRoles) {
-                        try {
-                            let role = interaction.guild.roles.cache.get(roleData.role_id);
-                            
-                            if (roleData.is_custom_created) {
-                                if (!role) {
-                                    const existingRole = interaction.guild.roles.cache.find(r => 
-                                        r.name === roleData.name
-                                    );
+                // Handle tickets category
+                const ticketsCategoryData = backupData.data.discordData.channels.ticketsCategory;
+                if (ticketsCategoryData) {
+                    const existingCategory = interaction.guild.channels.cache.get(ticketsCategoryData.id)
+                        || interaction.guild.channels.cache.find(c => 
+                            c.name === ticketsCategoryData.name && 
+                            c.type === ChannelType.GuildCategory
+                        );
 
-                                    if (!existingRole) {
-                                        // Get existing time roles to determine position
-                                        const existingTimeRoles = await db.getTimeBasedRoles(interaction.guildId);
-                                        const higherTimeRoles = existingTimeRoles.filter(r => 
-                                            r.days_required > roleData.days_required
-                                        );
-                                        const lowestHigherRole = higherTimeRoles.length > 0 
-                                            ? interaction.guild.roles.cache.get(
-                                                higherTimeRoles.sort((a, b) => 
-                                                    a.days_required - b.days_required
-                                                )[0].role_id
-                                              )
-                                            : null;
-
-                                        role = await interaction.guild.roles.create({
-                                            name: roleData.name || 'Time-Based Role',
-                                            color: roleData.color || '#99AAB5',
-                                            permissions: new PermissionsBitField([]),
-                                            mentionable: false,
-                                            position: lowestHigherRole ? lowestHigherRole.position : 1,
-                                            reason: 'Backup restoration - recreating time-based role'
-                                        });
-                                        createdEntities.timeBasedRoles++;
-                                    } else {
-                                        role = existingRole;
-                                    }
+                    if (!existingCategory) {
+                        const newCategory = await interaction.guild.channels.create({
+                            name: ticketsCategoryData.name,
+                            type: ChannelType.GuildCategory,
+                            permissionOverwrites: [
+                                {
+                                    id: interaction.guild.id,
+                                    deny: ['ViewChannel']
+                                },
+                                {
+                                    id: createdEntities.modRole?.id || backupData.data.settings.mod_role_id,
+                                    allow: ['ViewChannel', 'SendMessages', 'ManageChannels']
                                 }
-                            } else if (!role) {
-                                continue; // Skip non-custom roles that don't exist
-                            }
-
-                            await db.addTimeBasedRole(
-                                interaction.guildId,
-                                role.id,
-                                roleData.days_required,
-                                roleData.is_custom_created
-                            );
-                        } catch (error) {
-                            console.error(`Error restoring time-based role:`, error);
-                            continue;
-                        }
-                    }
-                }
-
-                // Import filtered terms if they exist
-                if (backupData.data.filteredTerms) {
-                    // Clear existing terms first
-                    await db.run('DELETE FROM filtered_terms WHERE guild_id = ?', [interaction.guildId]);
-    
-                    // Import explicit terms
-                    for (const term of backupData.data.filteredTerms.explicit) {
-                        await db.addFilteredTerm(interaction.guildId, term, 'explicit', 'SYSTEM');
-                    }
-    
-                    // Import suspicious terms
-                    for (const term of backupData.data.filteredTerms.suspicious) {
-                        await db.addFilteredTerm(interaction.guildId, term, 'suspicious', 'SYSTEM');
-                    }
-                }
-
-                // import the server settings
-                await db.updateServerSettings(
-                    interaction.guildId,
-                    backupData.data.settings
-                );
-
-                // import the enabled packs
-                if (backupData.data.enabledPacks && backupData.data.enabledPacks.length > 0) {
-                    for (const pack of backupData.data.enabledPacks) {
-                        await db.enablePack(interaction.guildId, pack.name);
-                    }
-                }
-
-                // Restore user roles
-                let restoredRolesCount = 0;
-                if (backupData.data.userRoles) {
-                    for (const userData of backupData.data.userRoles) {
-                        try {
-                            const member = await interaction.guild.members.fetch(userData.userId);
-                            if (member) {
-                                for (const roleData of userData.roles) {
-                                    let role = interaction.guild.roles.cache.get(roleData.id);
-                                    
-                                    if (!role) {
-                                        role = interaction.guild.roles.cache.find(r => r.name === roleData.name);
-                                        
-                                        if (!role) {
-                                            role = await interaction.guild.roles.create({
-                                                name: roleData.name,
-                                                color: roleData.color,
-                                                permissions: BigInt(roleData.permissions),
-                                                reason: 'Backup restoration - recreating user role'
-                                            });
-                                            createdEntities.otherRoles.push(role);
-                                        }
-                                    }
-                                    
-                                    await member.roles.add(role.id);
-                                    restoredRolesCount++;
-                                }
-                            }
-                        } catch (error) {
-                            console.error(`Error restoring roles for user ${userData.userId}:`, error);
-                            continue;
-                        }
+                            ]
+                        });
+                        backupData.data.settings.tickets_category_id = newCategory.id;
+                    } else {
+                        backupData.data.settings.tickets_category_id = existingCategory.id;
                     }
                 }
 
@@ -300,6 +222,142 @@ export const command = {
                     }
                 }
 
+                // Import time-based roles
+                if (backupData.data.timeBasedRoles?.length > 0) {
+                    for (const roleData of backupData.data.timeBasedRoles) {
+                        try {
+                            let role = interaction.guild.roles.cache.get(roleData.role_id);
+                            
+                            if (roleData.is_custom_created) {
+                                if (!role) {
+                                    const existingRole = interaction.guild.roles.cache.find(r => 
+                                        r.name === roleData.name
+                                    );
+
+                                    if (!existingRole) {
+                                        role = await interaction.guild.roles.create({
+                                            name: roleData.name || 'Time-Based Role',
+                                            color: roleData.color || '#99AAB5',
+                                            permissions: new PermissionsBitField([]),
+                                            mentionable: false,
+                                            reason: 'Backup restoration - recreating time-based role'
+                                        });
+                                        createdEntities.timeBasedRoles++;
+                                    } else {
+                                        role = existingRole;
+                                    }
+                                }
+                            } else if (!role) {
+                                continue;
+                            }
+
+                            await db.addTimeBasedRole(
+                                interaction.guildId,
+                                role.id,
+                                roleData.days_required,
+                                roleData.is_custom_created
+                            );
+                        } catch (error) {
+                            console.error(`Error restoring time-based role:`, error);
+                            continue;
+                        }
+                    }
+                }
+
+                // Import filtered terms if they exist
+                if (backupData.data.filteredTerms) {
+                    // Clear existing terms by using custom methods from database
+                    const existingTerms = await db.getFilteredTerms(interaction.guildId);
+                    for (const term of existingTerms.explicit.concat(existingTerms.suspicious)) {
+                        await db.removeFilteredTerm(interaction.guildId, term);
+                    }
+    
+                    // Import explicit terms
+                    for (const term of backupData.data.filteredTerms.explicit) {
+                        await db.addFilteredTerm(interaction.guildId, term, 'explicit', 'SYSTEM');
+                    }
+    
+                    // Import suspicious terms
+                    for (const term of backupData.data.filteredTerms.suspicious) {
+                        await db.addFilteredTerm(interaction.guildId, term, 'suspicious', 'SYSTEM');
+                    }
+                }
+
+                // Restore user roles
+                let restoredRolesCount = 0;
+                let roleErrorCount = 0;
+                if (backupData.data.userRoles) {
+                    // Check if bot has permissions to manage roles
+                    const botMember = await interaction.guild.members.fetch(interaction.client.user.id);
+                    const canManageRoles = botMember.permissions.has('MANAGE_ROLES');
+                    
+                    if (!canManageRoles) {
+                        console.log('Bot lacks permission to manage roles, skipping role restoration');
+                    } else {
+                        for (const userData of backupData.data.userRoles) {
+                            try {
+                                const member = await interaction.guild.members.fetch(userData.userId).catch(() => null);
+                                if (member) {
+                                    for (const roleData of userData.roles) {
+                                        try {
+                                            // Skip @everyone role
+                                            if (roleData.id === interaction.guild.id) continue;
+                                            
+                                            let role = interaction.guild.roles.cache.get(roleData.id);
+                                            
+                                            if (!role) {
+                                                role = interaction.guild.roles.cache.find(r => r.name === roleData.name);
+                                                
+                                                if (!role) {
+                                                    role = await interaction.guild.roles.create({
+                                                        name: roleData.name,
+                                                        color: roleData.color,
+                                                        permissions: BigInt(roleData.permissions),
+                                                        reason: 'Backup restoration - recreating user role'
+                                                    }).catch(err => {
+                                                        console.error(`Error creating role ${roleData.name}:`, err);
+                                                        return null;
+                                                    });
+                                                    
+                                                    if (role) createdEntities.otherRoles.push(role);
+                                                }
+                                            }
+                                            
+                                            if (role) {
+                                                // Check if bot can assign this role (role hierarchy)
+                                                const botHighestRole = botMember.roles.highest;
+                                                if (botHighestRole.position > role.position) {
+                                                    await member.roles.add(role.id);
+                                                    restoredRolesCount++;
+                                                } else {
+                                                    console.warn(`Cannot assign role ${role.name} due to role hierarchy`);
+                                                    roleErrorCount++;
+                                                }
+                                            }
+                                        } catch (roleError) {
+                                            console.error(`Error assigning role ${roleData.name || roleData.id}:`, roleError);
+                                            roleErrorCount++;
+                                        }
+                                    }
+                                }
+                            } catch (error) {
+                                console.error(`Error restoring roles for user ${userData.userId}:`, error);
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Import enabled packs
+                if (backupData.data.enabledPacks?.length > 0) {
+                    for (const pack of backupData.data.enabledPacks) {
+                        await db.enablePack(interaction.guildId, pack.name);
+                    }
+                }
+
+                // Import server settings
+                await db.updateServerSettings(interaction.guildId, backupData.data.settings);
+
                 await db.commitTransaction();
 
                 // Create status message
@@ -321,6 +379,9 @@ export const command = {
                 }
                 if (restoredRolesCount > 0) {
                     recreatedEntitiesMsg += `\n• Restored ${restoredRolesCount} role assignments`;
+                    if (roleErrorCount > 0) {
+                        recreatedEntitiesMsg += ` (${roleErrorCount} failed due to permissions)`;
+                    }
                 }
 
                 const embed = new EmbedBuilder()
@@ -341,11 +402,12 @@ export const command = {
                                   `• Enabled Packs (${backupData.data.enabledPacks?.length || 0})\n` +
                                   `• Channel Permissions (${backupData.data.channelPermissions?.length || 0})\n` +
                                   `• Time-Based Roles (${backupData.data.timeBasedRoles?.length || 0})\n` +
-                                  `• User Roles (${restoredRolesCount} assignments)\n` +
+                                  `• User Roles (${restoredRolesCount} assignments${roleErrorCount > 0 ? `, ${roleErrorCount} failed` : ''})\n` +
                                   `• Filtered Terms (${
                                       (backupData.data.filteredTerms?.explicit.length || 0) +
                                       (backupData.data.filteredTerms?.suspicious.length || 0)
-                                  })`,
+                                  })\n` +
+                                  `• Ticket System: ${backupData.data.settings.tickets_enabled ? 'Enabled' : 'Disabled'}`,
                             inline: false 
                         }
                     )

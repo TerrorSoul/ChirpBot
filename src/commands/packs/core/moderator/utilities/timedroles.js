@@ -1,5 +1,6 @@
 // commands/packs/core/moderator/utilities/timedroles.js
-import { ApplicationCommandOptionType, EmbedBuilder, PermissionsBitField } from 'discord.js';
+import { ApplicationCommandOptionType, EmbedBuilder, PermissionsBitField, ChannelType } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 import db from '../../../../../database/index.js';
 
 export const command = {
@@ -352,45 +353,71 @@ export const command = {
            }
 
            case 'sync': {
-                await interaction.reply({
-                    content: '🔄 Syncing time-based roles for all members...',
+            await interaction.reply({
+                content: '🔄 Syncing time-based roles for recently active members...',
+                ephemeral: true
+            });
+        
+            try {
+                const roles = await db.getTimeBasedRoles(interaction.guildId);
+                if (roles.length === 0) {
+                    await interaction.editReply({
+                        content: 'No time-based roles configured.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+        
+                roles.sort((a, b) => b.days_required - a.days_required);
+                
+                // Get channels to check for recent activity
+                const textChannels = interaction.guild.channels.cache
+                    .filter(c => c.type === ChannelType.GuildText)
+                    .first(5); // Limit to first 5 text channels
+                    
+                let activeUserIds = new Set();
+                let processed = 0;
+                let updated = 0;
+                
+                // Collect recent active users from the last 100 messages in up to 5 channels
+                await interaction.editReply({
+                    content: '🔄 Collecting recently active members...',
                     ephemeral: true
                 });
-            
-                try {
-                    const roles = await db.getTimeBasedRoles(interaction.guildId);
-                    if (roles.length === 0) {
-                        await interaction.editReply({
-                            content: 'No time-based roles configured.',
-                            ephemeral: true
-                        });
-                        return;
-                    }
-            
-                    roles.sort((a, b) => b.days_required - a.days_required);
-                    const members = await interaction.guild.members.fetch();
-                    let updated = 0;
-                    let processed = 0;
-            
-                    const batchSize = 10;
-                    const memberBatches = Array.from(members.values())
-                        .filter(member => !member.user.bot)
-                        .reduce((batches, member, i) => {
-                            const batchIndex = Math.floor(i / batchSize);
-                            if (!batches[batchIndex]) batches[batchIndex] = [];
-                            batches[batchIndex].push(member);
-                            return batches;
-                        }, []);
-            
-                    for (const batch of memberBatches) {
-                        await Promise.all(batch.map(async member => {
-                            const memberDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
+                
+                for (const channel of textChannels) {
+                    const messages = await channel.messages.fetch({ limit: 100 });
+                    messages.forEach(msg => {
+                        if (!msg.author.bot && msg.member) {
+                            activeUserIds.add(msg.author.id);
+                        }
+                    });
+                }
+                
+                await interaction.editReply({
+                    content: `🔄 Found ${activeUserIds.size} recently active members. Processing roles...`,
+                    ephemeral: true
+                });
+                
+                // Process active users in batches
+                const activeUsers = Array.from(activeUserIds);
+                const batchSize = 20;
+                const batches = Math.ceil(activeUsers.length / batchSize);
+                
+                for (let i = 0; i < batches; i++) {
+                    const userBatch = activeUsers.slice(i * batchSize, (i + 1) * batchSize);
+                    
+                    await Promise.all(userBatch.map(async userId => {
+                        try {
+                            const member = await interaction.guild.members.fetch(userId);
                             processed++;
-            
+                            
+                            const memberDays = Math.floor((Date.now() - member.joinedTimestamp) / (1000 * 60 * 60 * 24));
+                            
                             for (const roleConfig of roles) {
                                 const role = interaction.guild.roles.cache.get(roleConfig.role_id);
                                 if (!role) continue;
-            
+                                
                                 if (memberDays >= roleConfig.days_required && !member.roles.cache.has(role.id)) {
                                     await member.roles.add(role);
                                     await loggingService.logEvent(interaction.guild, 'ROLE_ADD', {
@@ -398,36 +425,40 @@ export const command = {
                                         userTag: member.user.tag,
                                         roleId: role.id,
                                         roleName: role.name,
-                                        reason: `Time-based role received after ${memberDays} days`
+                                        reason: `Time-based role received after ${memberDays} days (sync)`
                                     });
                                     updated++;
                                 }
                             }
-            
-                            if (processed % 50 === 0) {
-                                await interaction.editReply({
-                                    content: `🔄 Progress: ${processed}/${members.size} members checked (${updated} roles updated)...`,
-                                    ephemeral: true
-                                });
-                            }
-                        }));
-            
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        } catch (error) {
+                            console.error(`Error processing user ${userId}:`, error);
+                        }
+                    }));
+                    
+                    if (i % 2 === 0) {
+                        await interaction.editReply({
+                            content: `🔄 Progress: ${processed}/${activeUserIds.size} members checked (${updated} roles updated)...`,
+                            ephemeral: true
+                        });
                     }
-            
-                    await interaction.editReply({
-                        content: `✅ Sync complete! Checked ${processed} members and updated ${updated} roles.`,
-                        ephemeral: true
-                    });
-                } catch (error) {
-                    console.error('Error syncing time-based roles:', error);
-                    await interaction.editReply({
-                        content: 'An error occurred while syncing roles.',
-                        ephemeral: true
-                    });
+                    
+                    // delay between batches
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
-                break;
+                
+                await interaction.editReply({
+                    content: `✅ Sync complete! Checked ${processed} active members and updated ${updated} roles.`,
+                    ephemeral: true
+                });
+            } catch (error) {
+                console.error('Error syncing time-based roles:', error);
+                await interaction.editReply({
+                    content: 'An error occurred while syncing roles.',
+                    ephemeral: true
+                });
             }
+            break;
+        }
        }
    }
 };

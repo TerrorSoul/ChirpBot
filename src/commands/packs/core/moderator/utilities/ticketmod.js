@@ -2,6 +2,7 @@
 import { ApplicationCommandType, ApplicationCommandOptionType } from 'discord.js';
 import { handleTicketBlock, handleTicketUnblock, handleModTicketClose, handleTicketWipe } 
     from '../../../../../utils/ticketService.js';
+import db from '../../../../../database/index.js';
 
 export const command = {
     name: 'ticketmod',
@@ -75,6 +76,13 @@ export const command = {
         }
     ],
     execute: async (interaction) => {
+        const settings = await db.getServerSettings(interaction.guildId);
+        if (!settings?.tickets_enabled) {
+            return interaction.reply({
+                content: 'The ticket system is not enabled on this server.',
+                ephemeral: true
+            });
+        }
         const subcommand = interaction.options.getSubcommand();
 
         switch (subcommand) {

@@ -1,5 +1,5 @@
 import db from '../../../../../database/index.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ApplicationCommandOptionType } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ApplicationCommandOptionType, ChannelType } from 'discord.js';
 
 export const command = {
     name: 'reset',
@@ -37,7 +37,7 @@ export const command = {
 
         let warningMessage = '⚠️ **Warning**: This will reset all bot settings and data for this server.';
         if (deleteChannels) {
-            warningMessage += '\nThis will also delete channels created by the bot (logs, reports, welcome).';
+            warningMessage += '\nThis will also delete channels created by the bot (logs, reports, welcome, tickets).';
         }
         warningMessage += '\nAre you sure?';
 
@@ -73,17 +73,43 @@ export const command = {
 
                     // If deleting channels, do it last
                     if (deleteChannels && settings) {
-                        // Send one last update before channel deletion
-                        await i.editReply({
-                            content: '⚠️ Settings reset. Deleted channels.',
-                            components: []
-                        }).catch(() => {}); // Ignore errors here
+                        // Get all ticket-related channels
+                        const ticketChannels = await interaction.guild.channels.cache.filter(channel => {
+                            // Match forum channels named 'tickets'
+                            if (channel.name.toLowerCase() === 'tickets' && channel.type === ChannelType.GuildForum) {
+                                return true;
+                            }
+                            
+                            // Match text channels named 'tickets' 
+                            if (channel.name.toLowerCase() === 'tickets' && channel.type === ChannelType.GuildText) {
+                                return true;
+                            }
+                            
+                            // Match any channels under a tickets category/parent
+                            if (channel.parent?.name.toLowerCase() === 'tickets') {
+                                return true;
+                            }
+                            
+                            // Match any channel with 'ticket-' prefix
+                            if (channel.name.toLowerCase().startsWith('ticket-')) {
+                                return true;
+                            }
+                            
+                            return false;
+                        });
 
                         const channelsToDelete = [
                             settings.log_channel_id,
                             settings.reports_channel_id,
-                            settings.welcome_channel_id
+                            settings.welcome_channel_id,
+                            ...ticketChannels.map(c => c.id)
                         ].filter(Boolean);
+
+                        // Send one last update before channel deletion
+                        await i.editReply({
+                            content: '⚠️ Settings reset. Deleting channels...',
+                            components: []
+                        }).catch(() => {}); // Ignore errors here
 
                         for (const channelId of channelsToDelete) {
                             const channel = await interaction.guild.channels.fetch(channelId)

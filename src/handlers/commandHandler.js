@@ -9,6 +9,8 @@ import { checkCooldown, checkGlobalCooldown, addCooldown, addGlobalCooldown } fr
 import { DEFAULT_SETTINGS } from '../config/constants.js';
 import db from '../database/index.js';
 import { loggingService } from '../utils/loggingService.js';
+import { sanitizeInput } from '../utils/sanitization.js';
+import { validateCommandOptions } from '../utils/validation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +30,11 @@ function formatCommandOptions(options) {
 
     return options.data.map(option => {
         let value = option.value;
+        // Sanitize string values
+        if (typeof value === 'string') {
+            value = sanitizeInput(value);
+        }
+        
         // Handle special cases like mentions
         if (option.type === 6) { // USER type
             value = `<@${option.value}>`;
@@ -42,6 +49,12 @@ function formatCommandOptions(options) {
 }
 
 export async function loadCommands(client) {
+    // Check for required environment variables
+    if (!process.env.DISCORD_TOKEN) {
+        console.error('DISCORD_TOKEN environment variable is not set!');
+        process.exit(1);
+    }
+
     client.commands = new Collection();
     client.guildCommands = new Collection();
     client.globalCommands = new Collection();
@@ -112,7 +125,11 @@ export async function loadCommands(client) {
                         globalCommandsMap.set(command.name, command);
                     }
                 } catch (error) {
-                    console.error(`Error loading global command ${file}:`, error);
+                    console.error(`Error loading global command ${file}:`, {
+                        error: error.message,
+                        packName: packName,
+                        path: globalPath
+                    });
                 }
             }
         }
@@ -146,7 +163,12 @@ export async function loadCommands(client) {
                             guildCommandsMap.set(command.name, command);
                         }
                     } catch (error) {
-                        console.error(`Error loading guild command ${file}:`, error);
+                        console.error(`Error loading guild command ${file}:`, {
+                            error: error.message,
+                            packName: packName,
+                            category: category,
+                            permLevel: permLevel
+                        });
                     }
                 }
             }
@@ -189,7 +211,10 @@ export async function loadCommands(client) {
 
         console.log('Command registration completed successfully');
     } catch (error) {
-        console.error('Error registering commands:', error);
+        console.error('Error registering commands:', {
+            error: error.message,
+            stack: error.stack
+        });
         throw error;
     }
 }
@@ -275,6 +300,15 @@ export async function handleCommand(interaction) {
 
         if (!command) return;
 
+        // Validate command options first
+        if (!validateCommandOptions(interaction.options)) {
+            await interaction.reply({
+                content: "Invalid command options provided.",
+                ephemeral: true
+            });
+            return;
+        }
+
         // Handle global commands
         if (command.global) {
             const { onCooldown, timeLeft } = checkGlobalCooldown(
@@ -307,7 +341,7 @@ export async function handleCommand(interaction) {
             return;
         }
 
-        // Everything below this is for guild-only commands
+        // below is for guild-only commands
         if (!interaction.guild) {
             await interaction.reply({
                 content: "This command can only be used in servers.",
@@ -317,7 +351,8 @@ export async function handleCommand(interaction) {
         }
 
         // Force reload settings for guild commands
-        interaction.guild.settings = await db.getServerSettings(interaction.guild.id);
+        const freshSettings = await db.getServerSettings(interaction.guild.id);
+        interaction.guild.settings = freshSettings;
 
         // Check permissions for guild commands
         if (!await hasPermission(interaction, command)) {
@@ -392,24 +427,55 @@ export async function handleCommand(interaction) {
         });
         
     } catch (error) {
-        console.error('Error executing command:', error);
-        try {
-            const response = {
-                content: error.code === 50013 
-                    ? "I don't have permission to do that."
-                    : 'An error occurred while executing this command.',
-                ephemeral: true
-            };
+        if (error.code === 50013) {
+            console.error('Missing permissions to execute command:', {
+                error: error.message,
+                command: interaction.commandName,
+                guildId: interaction.guild?.id
+            });
+            
+            try {
+                const response = {
+                    content: "I don't have permission to do that.",
+                    ephemeral: true
+                };
 
-            if (interaction.deferred) {
-                await interaction.editReply(response);
-            } else if (!interaction.replied) {
-                await interaction.reply(response);
-            } else {
-                await interaction.followUp(response);
+                if (interaction.deferred) {
+                    await interaction.editReply(response);
+                } else if (!interaction.replied) {
+                    await interaction.reply(response);
+                } else {
+                    await interaction.followUp(response);
+                }
+            } catch (err) {
+                console.error('Error sending permission error response:', err);
             }
-        } catch (err) {
-            console.error('Error sending error response:', err);
-       }
-   }
+        } else {
+            console.error('Error executing command:', {
+                error: error.message,
+                stack: error.stack,
+                command: interaction.commandName,
+                guildId: interaction.guild?.id,
+                channelId: interaction.channelId,
+                userId: interaction.user?.id
+            });
+            
+            try {
+                const response = {
+                    content: 'An error occurred while executing this command.',
+                    ephemeral: true
+                };
+
+                if (interaction.deferred) {
+                    await interaction.editReply(response);
+                } else if (!interaction.replied) {
+                    await interaction.reply(response);
+                } else {
+                    await interaction.followUp(response);
+                }
+            } catch (err) {
+                console.error('Error sending error response:', err);
+            }
+        }
+    }
 }

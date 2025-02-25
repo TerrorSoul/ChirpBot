@@ -2,6 +2,8 @@
 import { EmbedBuilder, ChannelType, ThreadAutoArchiveDuration, PermissionFlagsBits } from 'discord.js';
 import db from '../database/index.js';
 import { loggingService } from '../utils/loggingService.js';
+import { sanitizeInput } from '../utils/sanitization.js';
+import { canSendDM } from '../utils/dmTracker.js';
 
 // Utility Functions
 async function verifyUserHistory(guild, userId) {
@@ -47,7 +49,11 @@ async function verifyUserHistory(guild, userId) {
         return warnings.length > 0 || reports.length > 0;
 
     } catch (error) {
-        console.error('Error verifying user history:', error);
+        console.error('Error verifying user history:', {
+            error: error.message,
+            userId: userId,
+            guildId: guild.id
+        });
         return false;
     }
 }
@@ -128,7 +134,14 @@ async function getOrCreateTicketSystem(guild) {
 
         return { type: 'category', channel: ticketCategory };
     } catch (error) {
-        console.error('Error creating ticket system:', error);
+        if (error.code === 50013) {
+            console.error('Missing permissions to create ticket system:', error.message);
+        } else {
+            console.error('Error creating ticket system:', {
+                error: error.message,
+                guildId: guild.id
+            });
+        }
         throw error;
     }
 }
@@ -137,7 +150,7 @@ async function getOrCreateTicketSystem(guild) {
 export async function handleTicketCreate(interaction) {
     try {
         const serverId = interaction.options.getString('server');
-        const message = interaction.options.getString('message');
+        const message = sanitizeInput(interaction.options.getString('message'));
 
         const guild = interaction.client.guilds.cache.get(serverId);
         if (!guild) {
@@ -289,13 +302,27 @@ export async function handleTicketCreate(interaction) {
             });
         }
     } catch (error) {
-        console.error('Error creating ticket:', error);
-        const response = interaction.deferred ? 
-            interaction.editReply : interaction.reply;
-        await response.call(interaction, {
-            content: "An error occurred while creating your ticket.",
-            ephemeral: true
-        });
+        if (error.code === 50013) {
+            console.error('Missing permissions to create ticket:', error.message);
+            const response = interaction.deferred ? 
+                interaction.editReply : interaction.reply;
+            await response.call(interaction, {
+                content: "I don't have permission to create tickets in that server. Please contact a server administrator.",
+                ephemeral: true
+            });
+        } else {
+            console.error('Error creating ticket:', {
+                error: error.message,
+                userId: interaction.user.id,
+                serverId: interaction.options.getString('server')
+            });
+            const response = interaction.deferred ? 
+                interaction.editReply : interaction.reply;
+            await response.call(interaction, {
+                content: "An error occurred while creating your ticket.",
+                ephemeral: true
+            });
+        }
     }
 }
 
@@ -304,7 +331,7 @@ export async function handleTicketReply(interaction, message = null) {
         // Handle slash command reply
         if (interaction) {
             console.log('Handling slash command ticket reply');
-            const content = interaction.options.getString('message');
+            const content = sanitizeInput(interaction.options.getString('message'));
             
             // Get user's latest ticket
             const ticket = await db.getLatestTicket(interaction.user.id);
@@ -376,8 +403,15 @@ export async function handleTicketReply(interaction, message = null) {
                 return;
             }
 
-            // Store the message
-            await db.addTicketMessage(ticket.id, message.author.id, message.content);
+            // Store the message with sanitized content
+            const sanitizedContent = sanitizeInput(message.content);
+            await db.addTicketMessage(ticket.id, message.author.id, sanitizedContent);
+
+            // Skip DM if the author is the ticket creator
+            if (message.author.id === ticket.user_id) {
+                console.log('Skipping DM - Author is ticket creator');
+                return;
+            }
 
             // Send DM if the reply is from someone other than the ticket creator
             console.log('Sending DM - Author is not ticket creator:', {
@@ -392,7 +426,7 @@ export async function handleTicketReply(interaction, message = null) {
                 const embed = new EmbedBuilder()
                     .setColor(0x0099FF)
                     .setTitle(`New Reply to Ticket #${ticket.id}`)
-                    .setDescription(message.content)
+                    .setDescription(sanitizedContent)
                     .setAuthor({
                         name: message.author.tag,
                         iconURL: message.author.displayAvatarURL()
@@ -406,18 +440,36 @@ export async function handleTicketReply(interaction, message = null) {
                     });
                 }
 
-                await ticketUser.send({ embeds: [embed] });
-                console.log('Successfully sent DM to ticket creator');
+                // Add DM rate limiting
+                if (await canSendDM(ticketUser.id)) {
+                    await ticketUser.send({ embeds: [embed] });
+                    console.log('Successfully sent DM to ticket creator');
+                } else {
+                    console.log(`DM rate limit reached for ticket user ${ticketUser.id}`);
+                    await message.react('⚠️');
+                }
             } catch (error) {
-                console.error('Error sending ticket reply DM:', error);
-                await message.reply('⚠️ Unable to send notification to the ticket creator.');
+                if (error.code === 50007) {
+                    console.error('Cannot send DM to ticket user - they have DMs disabled');
+                    await message.reply('⚠️ Unable to notify the ticket creator (they have DMs disabled).');
+                } else {
+                    console.error('Error sending ticket reply DM:', {
+                        error: error.message,
+                        ticketId: ticket.id,
+                        userId: ticket.user_id
+                    });
+                    await message.reply('⚠️ Unable to send notification to the ticket creator.');
+                }
             }
-            
-            console.log('Skipping DM - Author is ticket creator');
         }
-
     } catch (error) {
-        console.error('Error handling ticket reply:', error);
+        console.error('Error handling ticket reply:', {
+            error: error.message,
+            stack: error.stack,
+            interactionId: interaction?.id,
+            messageId: message?.id
+        });
+        
         if (interaction) {
             await interaction.reply({
                 content: "An error occurred while sending your reply.",
@@ -449,7 +501,10 @@ export async function handleTicketStatus(interaction) {
 
         await interaction.reply({ embeds: [embed], ephemeral: true });
     } catch (error) {
-        console.error('Error getting ticket status:', error);
+        console.error('Error getting ticket status:', {
+            error: error.message,
+            userId: interaction.user.id
+        });
         await interaction.reply({
             content: "An error occurred while fetching your ticket status.",
             ephemeral: true
@@ -459,7 +514,7 @@ export async function handleTicketStatus(interaction) {
 
 export async function handleTicketClose(interaction) {
     try {
-        const reason = interaction.options.getString('reason');
+        const reason = sanitizeInput(interaction.options.getString('reason'));
         const ticket = await db.getLatestTicket(interaction.user.id);
 
         if (!ticket) {
@@ -482,7 +537,10 @@ export async function handleTicketClose(interaction) {
             ephemeral: true
         });
     } catch (error) {
-        console.error('Error closing ticket:', error);
+        console.error('Error closing ticket:', {
+            error: error.message,
+            userId: interaction.user.id
+        });
         await interaction.reply({
             content: "An error occurred while closing the ticket.",
             ephemeral: true
@@ -491,6 +549,19 @@ export async function handleTicketClose(interaction) {
 }
 
 export async function handleModTicketClose(interaction) {
+    // Verify permissions first
+    const settings = await db.getServerSettings(interaction.guildId);
+    const hasModRole = settings?.mod_role_id && 
+                    interaction.member.roles.cache.has(settings.mod_role_id);
+    const isOwner = interaction.guild.ownerId === interaction.user.id;
+    
+    if (!hasModRole && !isOwner) {
+        return interaction.reply({
+            content: "You do not have permission to close tickets.",
+            ephemeral: true
+        });
+    }
+
     if (!interaction.channel?.isThread() && 
         interaction.channel.parent?.name !== 'Tickets') {
         return interaction.reply({
@@ -514,15 +585,36 @@ export async function handleModTicketClose(interaction) {
         });
     }
 
-    const reason = interaction.options.getString('reason');
+    const reason = sanitizeInput(interaction.options.getString('reason'));
     await closeTicket(ticket, interaction.user.id, reason, interaction.client);
     
     await interaction.reply(`Ticket closed. Reason: ${reason}`);
 }
 
 export async function handleTicketBlock(interaction) {
+    // Verify permissions first
+    const settings = await db.getServerSettings(interaction.guildId);
+    const hasModRole = settings?.mod_role_id && 
+                    interaction.member.roles.cache.has(settings.mod_role_id);
+    const isOwner = interaction.guild.ownerId === interaction.user.id;
+    
+    if (!hasModRole && !isOwner) {
+        return interaction.reply({
+            content: "You do not have permission to block users from creating tickets.",
+            ephemeral: true
+        });
+    }
+
     const user = interaction.options.getUser('user');
-    const reason = interaction.options.getString('reason');
+    const reason = sanitizeInput(interaction.options.getString('reason'));
+
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (!member) {
+        return interaction.reply({
+            content: "That user is not a member of this server.",
+            ephemeral: true
+        });
+    }
 
     await db.blockUser(interaction.guildId, user.id, interaction.user.id, reason);
 
@@ -541,7 +633,28 @@ export async function handleTicketBlock(interaction) {
 }
 
 export async function handleTicketUnblock(interaction) {
+    // Verify permissions first
+    const settings = await db.getServerSettings(interaction.guildId);
+    const hasModRole = settings?.mod_role_id && 
+                    interaction.member.roles.cache.has(settings.mod_role_id);
+    const isOwner = interaction.guild.ownerId === interaction.user.id;
+    
+    if (!hasModRole && !isOwner) {
+        return interaction.reply({
+            content: "You do not have permission to unblock users.",
+            ephemeral: true
+        });
+    }
+
     const user = interaction.options.getUser('user');
+
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (!member) {
+        return interaction.reply({
+            content: "That user is not a member of this server.",
+            ephemeral: true
+        });
+    }
 
     await db.unblockUser(interaction.guildId, user.id);
 
@@ -565,10 +678,11 @@ export async function closeTicket(ticket, userId, reason, client) {
         const guild = client.guilds.cache.get(ticket.guild_id);
         if (!guild) return;
 
+        const sanitizedReason = sanitizeInput(reason);
         const closeEmbed = new EmbedBuilder()
             .setColor(0xFF0000)
             .setTitle('Ticket Closed')
-            .setDescription(`Reason: ${reason}`)
+            .setDescription(`Reason: ${sanitizedReason}`)
             .setTimestamp();
 
         // Handle thread vs channel differently
@@ -586,7 +700,10 @@ export async function closeTicket(ticket, userId, reason, client) {
                 try {
                     await thread.delete();
                 } catch (error) {
-                    console.error('Error deleting ticket thread:', error);
+                    console.error('Error deleting ticket thread:', {
+                        error: error.message,
+                        threadId: thread.id
+                    });
                     // Fall back to archiving if deletion fails
                     await thread.setArchived(true);
                 }
@@ -601,7 +718,10 @@ export async function closeTicket(ticket, userId, reason, client) {
                 try {
                     await channel.delete();
                 } catch (error) {
-                    console.error('Error deleting ticket channel:', error);
+                    console.error('Error deleting ticket channel:', {
+                        error: error.message,
+                        channelId: channel.id
+                    });
                 }
             }, 1 * 60 * 1000);
         }
@@ -612,22 +732,36 @@ export async function closeTicket(ticket, userId, reason, client) {
             const userEmbed = new EmbedBuilder()
                 .setColor(0xFF0000)
                 .setTitle(`Ticket #${ticket.id} Closed`)
-                .setDescription(reason)
+                .setDescription(sanitizedReason)
                 .setTimestamp();
 
-            await user.send({ embeds: [userEmbed] });
+            // Add DM rate limiting
+            if (await canSendDM(user.id)) {
+                await user.send({ embeds: [userEmbed] });
+            }
         } catch (error) {
-            console.error('Error sending ticket close notification:', error);
+            if (error.code === 50007) {
+                console.error('Cannot send ticket close notification - user has DMs disabled');
+            } else {
+                console.error('Error sending ticket close notification:', {
+                    error: error.message,
+                    userId: ticket.user_id
+                });
+            }
         }
 
         await loggingService.logEvent(guild, 'TICKET_CLOSED', {
             userId: ticket.user_id,
             ticketId: ticket.id,
             closedBy: userId,
-            reason: reason
+            reason: sanitizedReason
         });
     } catch (error) {
-        console.error('Error closing ticket:', error);
+        console.error('Error closing ticket:', {
+            error: error.message,
+            ticketId: ticket.id,
+            userId: userId
+        });
         throw error;
     }
 }
@@ -648,11 +782,33 @@ export async function handleModeratorReply(message) {
         return;
     }
 }
-
+ 
 export async function handleTicketWipe(interaction) {
     try {
+        // Verify permissions first
+        const settings = await db.getServerSettings(interaction.guildId);
+        const hasModRole = settings?.mod_role_id && 
+                        interaction.member.roles.cache.has(settings.mod_role_id);
+        const isOwner = interaction.guild.ownerId === interaction.user.id;
+        
+        if (!hasModRole && !isOwner) {
+            return interaction.reply({
+                content: "You do not have permission to wipe tickets.",
+                ephemeral: true
+            });
+        }
+        
         const user = interaction.options.getUser('user');
-        const reason = interaction.options.getString('reason');
+        const reason = sanitizeInput(interaction.options.getString('reason'));
+
+        // Check if user is a member of the guild
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+        if (!member) {
+            return interaction.reply({
+                content: "That user is not a member of this server.",
+                ephemeral: true
+            });
+        }
 
         await interaction.deferReply({ ephemeral: true });
 
@@ -674,13 +830,25 @@ export async function handleTicketWipe(interaction) {
                     const thread = await forumChannel.threads.fetch(ticket.thread_id).catch(() => null);
                     if (thread) {
                         await thread.setLocked(true);
-                        await thread.setArchived(true);
+                        await thread.delete().catch(error => {
+                            console.error('Error deleting ticket thread during wipe:', {
+                                error: error.message,
+                                threadId: thread.id,
+                                ticketId: ticket.id
+                            });
+                        });
                     }
                 }
             } else {
                 const channel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
                 if (channel) {
-                    await channel.delete().catch(console.error);
+                    await channel.delete().catch(error => {
+                        console.error('Error deleting ticket channel during wipe:', {
+                            error: error.message,
+                            channelId: channel.id,
+                            ticketId: ticket.id
+                        });
+                    });
                 }
             }
         }
@@ -704,7 +872,12 @@ export async function handleTicketWipe(interaction) {
         });
 
     } catch (error) {
-        console.error('Error wiping tickets:', error);
+        console.error('Error wiping tickets:', {
+            error: error.message,
+            stack: error.stack,
+            guildId: interaction.guildId,
+            userId: interaction.options.getUser('user')?.id
+        });
         const response = interaction.deferred ? 
             interaction.editReply : interaction.reply;
         await response.call(interaction, {
