@@ -12,11 +12,14 @@ export const command = {
     description: 'Displays the server rules as a video.',
     permissionLevel: 'moderator',
     execute: async (interaction) => {
+        // Immediately defer the reply to keep the interaction valid
+        await interaction.deferReply();
+        
         // Path to the MP4 file in the same folder
         const videoPath = path.join(__dirname, 'rules.mp4'); 
         const attachment = new AttachmentBuilder(videoPath);
 
-        // Send just text and the video
-        await interaction.reply({ content: '**📜 Server Rules:**', files: [attachment] });
+        // Send the response when ready
+        await interaction.editReply({ content: '**📜 Server Rules:**', files: [attachment] });
     },
 };
