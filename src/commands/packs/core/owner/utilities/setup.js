@@ -351,7 +351,7 @@ export const command = {
                 const terms = await db.getFilteredTerms(interaction.guildId);
                 if (!terms.explicit.length && !terms.suspicious.length) {
                     console.log('Importing default filtered terms...');
-                    await db.importDefaultTerms(interaction.guildId, FILTERED_TERMS, 'SYSTEM');
+                    await db.importDefaultTerms(interaction.guildId, FILTERED_TERMS, interaction.client.user.id);
                 }
             }
     
