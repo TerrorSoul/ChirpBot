@@ -1,3 +1,4 @@
+// commands/packs/core/owner/utilities/setup.js
 import { 
     ApplicationCommandOptionType, 
     ChannelType, 
@@ -166,6 +167,70 @@ export const command = {
                 ephemeral: true
             });
         }
+        
+        // Check bot's role position
+        const botRole = botMember.roles.highest;
+        const higherRoles = interaction.guild.roles.cache.filter(r => r.position > botRole.position);
+        const isHighEnough = higherRoles.size <= 5; // Arbitrary threshold
+        
+        if (!isHighEnough) {
+            const warningEmbed = new EmbedBuilder()
+                .setTitle('⚠️ Bot Role Position Warning')
+                .setColor('#FFA500')
+                .setDescription(`My highest role (${botRole.name}) is positioned low in the server hierarchy. This may cause issues with moderation commands.`)
+                .addFields({ 
+                    name: 'Recommendation', 
+                    value: 'Move my role higher in Server Settings > Roles to ensure I can manage roles properly.'
+                });
+            
+            await interaction.reply({ embeds: [warningEmbed], ephemeral: true });
+            
+            // Add a confirmation prompt to continue despite the warning
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('continue_setup')
+                        .setLabel('Continue Setup Anyway')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId('cancel_setup_role')
+                        .setLabel('Cancel Setup')
+                        .setStyle(ButtonStyle.Secondary)
+                );
+            
+            const confirmation = await interaction.followUp({
+                content: 'Do you want to continue with setup despite the role position warning?',
+                components: [row],
+                ephemeral: true
+            });
+            
+            try {
+                const response = await confirmation.awaitMessageComponent({
+                    filter: i => i.user.id === interaction.user.id,
+                    time: 30000
+                });
+                
+                if (response.customId === 'cancel_setup_role') {
+                    await response.update({
+                        content: 'Setup cancelled. Please adjust the bot role position and try again.',
+                        components: []
+                    });
+                    return;
+                }
+                
+                await response.update({
+                    content: 'Continuing with setup despite role position warning...',
+                    components: []
+                });
+                // Continue with setup...
+            } catch (error) {
+                await interaction.editReply({
+                    content: 'Setup timed out. Please try again.',
+                    components: []
+                });
+                return;
+            }
+        }
     
         const existingSettings = await db.getServerSettings(interaction.guildId);
         const isFirstTimeSetup = !existingSettings?.setup_completed;
@@ -284,6 +349,25 @@ export const command = {
                 });
             }
             else if (isFirstTimeSetup) {
+                const setupEmbed = new EmbedBuilder()
+                    .setTitle('🚀 Bot Setup')
+                    .setColor('#00AAFF')
+                    .setDescription('Welcome to the bot setup process! This will configure the bot for your server.')
+                    .addFields(
+                        {
+                            name: '✅ Quick Setup',
+                            value: 'Automatically creates necessary channels and roles with recommended settings.'
+                        },
+                        {
+                            name: '⚙️ Manual Setup',
+                            value: 'Configure specific settings using command options:\n`/setup mod_role:@role log_channel:#channel`'
+                        },
+                        {
+                            name: '📝 After Setup',
+                            value: '• Use `/manageperms` to control which commands can be used in which channels\n• Use `/help` to see available commands'
+                        }
+                    );
+    
                 const row = new ActionRowBuilder()
                     .addComponents(
                         new ButtonBuilder()
@@ -297,9 +381,7 @@ export const command = {
                     );
     
                 const confirmation = await interaction.reply({
-                    content: 'This appears to be your first time setting up the bot.\n\n' +
-                            'Would you like to use quick setup to automatically create channels and roles with default settings?\n\n' +
-                            'If you choose manual setup, use the command options to configure specific settings (e.g., `/setup mod_role @role log_channel #channel`)',
+                    embeds: [setupEmbed],
                     components: [row],
                     ephemeral: true
                 });
@@ -313,6 +395,7 @@ export const command = {
                     if (response.customId === 'quick_setup') {
                         await response.update({
                             content: 'Running quick setup...',
+                            embeds: [],
                             components: []
                         });
                         settings = await quickSetup(interaction);
@@ -322,6 +405,7 @@ export const command = {
                             content: 'Quick setup cancelled. Use the command options to configure your settings manually:\n' +
                                     'Example: `/setup mod_role @role log_channel #channel`\n' +
                                     'You can configure one or multiple settings at once.',
+                            embeds: [],
                             components: []
                         });
                         return;
@@ -329,6 +413,7 @@ export const command = {
                 } catch (error) {
                     await interaction.editReply({
                         content: 'Setup cancelled (timed out).',
+                        embeds: [],
                         components: []
                     });
                     return;
@@ -367,11 +452,22 @@ export const command = {
             
             // Get enabled packs for this guild
             const enabledPacks = await db.getEnabledPacks(interaction.guildId);
-            const enabledPackNames = enabledPacks.map(pack => pack.name);
+            
+            // Fix: Properly create enabledPackNames as a Set
+            const packNames = [];
+            if (Array.isArray(enabledPacks)) {
+                for (const pack of enabledPacks) {
+                    if (pack && pack.name) {
+                        packNames.push(pack.name);
+                    }
+                }
+            }
+            packNames.push('core');
+            const enabledPackNames = new Set(packNames);
             
             // Filter commands based on enabled packs
             const guildCommandsArray = Array.from(interaction.client.guildCommands.values())
-                .filter(cmd => cmd.pack === 'core' || enabledPackNames.includes(cmd.pack));
+                .filter(cmd => cmd.pack === 'core' || enabledPackNames.has(cmd.pack));
             
             console.log(`Registering ${guildCommandsArray.length} guild commands for ${interaction.guild.name}`);
             

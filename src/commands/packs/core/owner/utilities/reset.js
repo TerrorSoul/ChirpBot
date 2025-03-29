@@ -1,5 +1,6 @@
 import db from '../../../../../database/index.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ApplicationCommandOptionType, ChannelType } from 'discord.js';
+import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
     name: 'reset',
@@ -62,6 +63,9 @@ export const command = {
                         content: '🔄 Starting reset process...',
                         components: []
                     });
+
+                    // Clear all caches from loggingService
+                    loggingService.clearAllCaches();
 
                     // Clear settings from cache
                     interaction.guild.settings = null;
