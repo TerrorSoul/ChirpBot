@@ -27,6 +27,10 @@ if (!global.purgedMessages) {
     global.purgedMessages = new Map();
 }
 
+if (!global.purgeExecutors) {
+    global.purgeExecutors = new Map();
+}
+
 // Image downloading rate limiting
 const imageDownloadQueue = new Map();
 const MAX_CONCURRENT_DOWNLOADS = 2;
@@ -395,11 +399,12 @@ async function logImages(message, settings) {
     }
 }
 
-async function logMessagePurge(guild, messageCount, channel, executor, messages) {
+async function logMessagePurge(guild, messageCount, channel, executor, messages, reason = "No reason provided") {
     try {
         // Create a log of purged messages
         let logContent = `Channel: <#${channel.id}>\n`;
         logContent += `Purged by: <@${executor.id}> (${executor.tag})\n`;
+        logContent += `Reason: ${reason}\n`;
         logContent += `Messages purged: ${messageCount}\n\n`;
         
         // Process and include message content
@@ -441,12 +446,13 @@ async function logMessagePurge(guild, messageCount, channel, executor, messages)
             }
         }
         
-        // Log the purge action
+        // Log the purge action - using executor's ID to ensure they get the log
         await loggingService.logEvent(guild, 'MESSAGES_PURGED', {
-            userId: executor.id,
+            userId: executor.id,  // This should direct the log to the moderator
             userTag: executor.tag,
             channelId: channel.id,
             messageCount: messageCount,
+            reason: reason,
             purgeDetails: logContent
         });
     } catch (error) {
@@ -714,28 +720,46 @@ export async function initHandlers(client) {
         });
     });
     
-    // New event for message bulk delete (purging)
+    // event for message bulk delete (purging)
     client.on('messageDeleteBulk', async (messages, channel) => {
         try {
             if (!channel.guild) return;
             await ensureGuildSettings(channel.guild);
             
-            // Try to find who initiated the purge from audit logs
-            const auditLogs = await channel.guild.fetchAuditLogs({
-                type: 73, // MESSAGE_BULK_DELETE
-                limit: 1,
-            });
+            // Check if we have tracked the executor for this channel
+            let executor = null;
+            let reason = "No reason provided";
             
-            const bulkDeleteLog = auditLogs.entries.first();
-            let executor = channel.client.user; // Default to the bot
+            if (global.purgeExecutors.has(channel.id)) {
+                const executorInfo = global.purgeExecutors.get(channel.id);
+                // Only use if the purge was recent (within 15 seconds)
+                if (Date.now() - executorInfo.timestamp < 15000) {
+                    executor = {
+                        id: executorInfo.id,
+                        tag: executorInfo.tag
+                    };
+                    reason = executorInfo.reason;
+                }
+            }
             
-            if (bulkDeleteLog && (Date.now() - bulkDeleteLog.createdTimestamp) < 10000) {
-                // If audit log exists and is recent (within 10 seconds), use that executor
-                executor = bulkDeleteLog.executor;
+            // If we don't have tracked executor, fall back to audit logs
+            if (!executor) {
+                const auditLogs = await channel.guild.fetchAuditLogs({
+                    type: 73, // MESSAGE_BULK_DELETE
+                    limit: 1,
+                });
+                
+                const bulkDeleteLog = auditLogs.entries.first();
+                executor = channel.client.user; // Default to the bot
+                
+                if (bulkDeleteLog && (Date.now() - bulkDeleteLog.createdTimestamp) < 10000) {
+                    // If audit log exists and is recent (within 10 seconds), use that executor
+                    executor = bulkDeleteLog.executor;
+                }
             }
             
             // Log the purge with detailed information
-            await logMessagePurge(channel.guild, messages.size, channel, executor, messages);
+            await logMessagePurge(channel.guild, messages.size, channel, executor, messages, reason);
             
         } catch (error) {
             console.error('Error handling bulk message delete:', {

@@ -2,6 +2,11 @@
 import { ApplicationCommandOptionType } from 'discord.js';
 import db from '../../../../../database/index.js';
 
+// Initialize global tracking if it doesn't exist
+if (!global.purgeExecutors) {
+    global.purgeExecutors = new Map();
+}
+
 export const command = {
     name: 'purgeuser',
     description: 'Delete a specified number of messages from a user in this channel (max 24h old)',
@@ -63,9 +68,31 @@ export const command = {
                     ephemeral: true
                 });
             }
+            
+            // Store the executor information before deleting messages
+            const executorInfo = {
+                id: interaction.user.id,
+                tag: interaction.user.tag,
+                reason: reason,
+                timestamp: Date.now(),
+                targetUser: {
+                    id: targetUser.id,
+                    tag: targetUser.tag
+                }
+            };
+            
+            // Use channel ID as key to track who initiated the purge
+            global.purgeExecutors.set(interaction.channel.id, executorInfo);
 
             const deletedCount = await interaction.channel.bulkDelete(userMessages, true)
                 .then(deleted => deleted.size);
+                
+            // Set a timeout to clean up the stored executor
+            setTimeout(() => {
+                if (global.purgeExecutors.has(interaction.channel.id)) {
+                    global.purgeExecutors.delete(interaction.channel.id);
+                }
+            }, 30000); // 30 seconds should be enough
 
             await interaction.editReply({
                 content: `Deleted ${deletedCount} messages from ${targetUser.tag}.`,

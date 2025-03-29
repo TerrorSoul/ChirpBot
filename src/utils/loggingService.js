@@ -11,7 +11,7 @@ class LoggingService {
        this.threadDeletionQueue = new Map();
 
        // Constants for thread management
-       this.THREAD_CLEANUP_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+       this.THREAD_CLEANUP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours
        this.MAX_ACTIVE_THREADS = 950; // Discord limit is 1000
        this.THREAD_ARCHIVE_BATCH = 500;
        this.LOCK_TIMEOUT = 30000; // 30 seconds

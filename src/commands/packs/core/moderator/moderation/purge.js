@@ -1,6 +1,11 @@
 // commands/packs/core/moderator/moderation/purge.js
 import { ApplicationCommandOptionType } from 'discord.js';
 
+// Initialize global tracking if it doesn't exist
+if (!global.purgeExecutors) {
+    global.purgeExecutors = new Map();
+}
+
 export const command = {
    name: 'purge',
    description: 'Delete a specified number of messages from the channel (max 24h old)',
@@ -54,9 +59,27 @@ export const command = {
                    ephemeral: true
                });
            }
+           
+           // Store the executor information before deleting messages
+           const executorInfo = {
+               id: interaction.user.id,
+               tag: interaction.user.tag,
+               reason: reason,
+               timestamp: Date.now()
+           };
+           
+           // Use channel ID as key to track who initiated the purge
+           global.purgeExecutors.set(interaction.channel.id, executorInfo);
 
            const deletedCount = await interaction.channel.bulkDelete(filteredMessages, true)
                .then(deleted => deleted.size);
+               
+           // Set a timeout to clean up the stored executor after a reasonable time
+           setTimeout(() => {
+               if (global.purgeExecutors.has(interaction.channel.id)) {
+                   global.purgeExecutors.delete(interaction.channel.id);
+               }
+           }, 30000); // 30 seconds should be enough
 
            await interaction.editReply({
                content: `Deleted ${deletedCount} messages.`,
