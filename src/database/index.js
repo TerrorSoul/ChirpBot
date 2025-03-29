@@ -412,6 +412,19 @@ async function initDatabase() {
                 PRIMARY KEY (guild_id, user_id)
             )`);
 
+        // Reminders
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                reminder_time TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
        // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_welcome_history_guild ON welcome_message_history(guild_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_command_packs_name ON command_packs(name)`);
@@ -431,6 +444,8 @@ async function initDatabase() {
        await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_channel ON tickets(channel_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_thread ON tickets(thread_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_messages ON ticket_messages(ticket_id)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(reminder_time)`);
+       await db.run(`CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id)`);
 
        await updateDatabaseSchema();
        console.log('Database ready');
@@ -1596,6 +1611,154 @@ const database = {
         }
     },
 
+    // Reminder System
+    createReminder: async (userId, guildId, channelId, message, reminderTime) => {
+        try {
+            if (!validateUserId(userId) || !validateGuildId(guildId) || 
+                !validateChannelId(channelId) || !validateString(message, 1000)) {
+                console.error('Invalid parameters for createReminder');
+                return { error: 'Invalid parameters' };
+            }
+            
+            const reminderTimeStr = reminderTime instanceof Date ? 
+                reminderTime.toISOString() : reminderTime;
+                
+            return await db.run(`
+                INSERT INTO reminders 
+                (user_id, guild_id, channel_id, message, reminder_time) 
+                VALUES (?, ?, ?, ?, ?)
+            `, [userId, guildId, channelId, sanitizeInput(message), reminderTimeStr]);
+        } catch (error) {
+            console.error('Error creating reminder:', {
+                error: error.message,
+                userId: userId
+            });
+            return { error: 'Database error', details: error.message };
+        }
+    },
+
+    getUserReminders: async (userId) => {
+        try {
+            if (!validateUserId(userId)) {
+                console.error('Invalid userId parameter for getUserReminders');
+                return [];
+            }
+            
+            return await db.all(`
+                SELECT id, message, reminder_time 
+                FROM reminders
+                WHERE user_id = ? AND reminder_time > datetime('now')
+                ORDER BY reminder_time ASC
+            `, [userId]);
+        } catch (error) {
+            console.error('Error getting user reminders:', {
+                error: error.message,
+                userId: userId
+            });
+            return [];
+        }
+    },
+
+    deleteReminder: async (id, userId) => {
+        try {
+            if (!validateInteger(id, 1) || !validateUserId(userId)) {
+                console.error('Invalid parameters for deleteReminder');
+                return { error: 'Invalid parameters' };
+            }
+            
+            // Check if the reminder exists in the database
+            const reminder = await db.get(`
+                SELECT * FROM reminders 
+                WHERE id = ? AND user_id = ?
+            `, [id, userId]);
+            
+            if (!reminder) {
+                return { success: false, reason: 'Reminder not found or not yours' };
+            }
+            
+            // Proceed with the deletion
+            await db.run('DELETE FROM reminders WHERE id = ?', [id]);
+            return { success: true };
+        } catch (error) {
+            console.error('Error deleting reminder:', {
+                error: error.message,
+                id: id,
+                userId: userId
+            });
+            return { success: false, reason: 'Database error' };
+        }
+    },    
+
+    getPendingRemindersInTimeframe: async (startTime, endTime) => {
+        try {
+            return await db.all(`
+                SELECT * FROM reminders
+                WHERE reminder_time > ? AND reminder_time < ?
+                ORDER BY reminder_time ASC
+            `, [startTime.toISOString(), endTime.toISOString()]);
+        } catch (error) {
+            console.error('Error getting pending reminders in timeframe:', error);
+            return [];
+        }
+    },
+
+    getReminderById: async (id, userId) => {
+        try {
+            if (!validateInteger(id, 1) || !validateUserId(userId)) {
+                console.error('Invalid parameters for getReminderById');
+                return null;
+            }
+            
+            return await db.get(`
+                SELECT * FROM reminders 
+                WHERE id = ? AND user_id = ?
+            `, [id, userId]);
+        } catch (error) {
+            console.error('Error getting reminder by ID:', error);
+            return null;
+        }
+    },
+
+    countUserReminders: async (userId) => {
+        try {
+            const result = await db.get(`
+                SELECT COUNT(*) as count
+                FROM reminders
+                WHERE user_id = ? AND reminder_time > datetime('now')
+            `, [userId]);
+            return result.count;
+        } catch (error) {
+            console.error('Error counting user reminders:', error);
+            return 0;
+        }
+    },
+
+    getPendingReminders: async () => {
+        try {
+            return await db.all(`
+                SELECT * FROM reminders
+                WHERE reminder_time > datetime('now')
+                ORDER BY reminder_time ASC
+            `);
+        } catch (error) {
+            console.error('Error getting pending reminders:', error);
+            return [];
+        }
+    },
+
+    cleanupExpiredReminders: async () => {
+        try {
+            const result = await db.run(`
+                DELETE FROM reminders 
+                WHERE reminder_time < datetime('now', '-1 day')
+            `);
+            return { success: true, deleted: result.changes };
+        } catch (error) {
+            console.error('Error cleaning up expired reminders:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
    clearOldBackups: async (guildId, keepCount = 5) => {
        try {
            if (!validateGuildId(guildId) || !validateInteger(keepCount, 1, 20)) {
@@ -2652,7 +2815,7 @@ const database = {
         }
     },
     
-    // New method to safely close the database connection
+    // safely close the database connection
     shutdown: async () => {
         try {
             // Clear any open transaction timeouts
@@ -2663,6 +2826,11 @@ const database = {
             
             // Ensure cache is cleaned up
             serverSettingsCache.clear();
+            
+            // Clean up reminder timeouts if reminderManager exists
+            if (global.reminderManager) {
+                global.reminderManager.cleanup();
+            }
             
             console.log('Closing database connection...');
             await db.close();
@@ -2688,6 +2856,8 @@ setInterval(async () => {
         
         const spamResult = await database.clearOldSpamWarnings(24);
         const reportsResult = await database.clearOldResolvedReports(30);
+        
+        const remindersResult = await database.cleanupExpiredReminders();
         
         serverSettingsCache.clear();
         lastCacheCleanup = Date.now();

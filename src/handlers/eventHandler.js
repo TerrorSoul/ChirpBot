@@ -8,6 +8,7 @@ import { loggingService } from '../utils/loggingService.js';
 import { checkModeratorRole } from '../utils/permissions.js';
 import { handleTicketReply } from '../utils/ticketService.js';
 import { sanitizeInput } from '../utils/sanitization.js';
+import { canSendDM } from '../utils/dmTracker.js';
 import db from '../database/index.js';
 import path from 'path';
 import fs from 'fs';
@@ -15,6 +16,21 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const activeTimeouts = new Map();
+
+// Global tracking for role button interactions to prevent duplicate logging
+if (!global.lastRoleButtonInteractions) {
+    global.lastRoleButtonInteractions = new Map();
+}
+
+// Global tracking for purged messages
+if (!global.purgedMessages) {
+    global.purgedMessages = new Map();
+}
+
+// Image downloading rate limiting
+const imageDownloadQueue = new Map();
+const MAX_CONCURRENT_DOWNLOADS = 2;
+const DOWNLOAD_RESET_TIME = 60000; // 1 minute
 
 async function ensureGuildSettings(guild) {
     if (!guild.settings) {
@@ -131,11 +147,15 @@ async function handleTimeoutExpiration(guild, userId, userTag) {
                 .setTitle('Timeout Expired')
                 .setDescription(`Your timeout in **${guild.name}** has expired. You can now send messages again.`)
                 .setTimestamp();
-            await user.send({ embeds: [embed] }).catch(error => {
-                if (error.code !== 50007) {
-                    console.error('Error sending DM:', error);
-                }
-            });
+            
+            // Add DM rate limiting
+            if (await canSendDM(user.id)) {
+                await user.send({ embeds: [embed] }).catch(error => {
+                    if (error.code !== 50007) {
+                        console.error('Error sending DM:', error);
+                    }
+                });
+            }
         } catch (error) {
             if (error.code === 10013) {
                 console.error('Error fetching user for DM - user no longer exists:', error.message);
@@ -153,6 +173,287 @@ async function handleTimeoutExpiration(guild, userId, userTag) {
             error: error.message,
             userId: userId,
             guildId: guild.id
+        });
+    }
+}
+
+async function downloadAndSaveImage(attachment, userId, messageId) {
+    try {
+        // Validate attachment
+        if (!attachment?.url || !attachment.contentType) {
+            return null;
+        }
+        
+        // Validate file type - whitelist approach
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!allowedTypes.some(type => attachment.contentType.startsWith(type))) {
+            console.log(`Skipping non-whitelisted image type: ${attachment.contentType}`);
+            return null;
+        }
+        
+        // Set download limits
+        const MAX_SIZE = 20 * 1024 * 1024; // 20MB limit
+        const TIMEOUT = 6000; // 6 second timeout
+        
+        // Skip if file is too large
+        if (attachment.size > MAX_SIZE) {
+            console.log(`Skipping large image download (${attachment.size} bytes): ${attachment.url}`);
+            return null;
+        }
+        
+        // Setup abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+        
+        // Download with timeout
+        const response = await fetch(attachment.url, { 
+            signal: controller.signal,
+            headers: { 
+                'User-Agent': 'DiscordBot (ModeratorBot, v1.0.0)'
+            }
+        });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            throw new Error(`Failed to download image: ${response.status} ${response.statusText}`);
+        }
+        
+        // Double-check content type from response headers
+        const contentType = response.headers.get('content-type');
+        if (!allowedTypes.some(type => contentType?.startsWith(type))) {
+            throw new Error(`Content-type mismatch - reported: ${contentType}`);
+        }
+        
+        const buffer = await response.arrayBuffer();
+        
+        // Check file signature/magic bytes for common image formats
+        const bytes = new Uint8Array(buffer.slice(0, 8));
+        const hexSignature = Array.from(bytes.slice(0, 4))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+            
+        // Validate file signatures
+        const jpegSignature = ['ffd8ff'];
+        const pngSignature = ['89504e47'];
+        const gifSignature = ['47494638'];
+        const webpSignature = ['52494646']; // RIFF header for WebP
+        
+        const validSignature = jpegSignature.some(sig => hexSignature.startsWith(sig)) ||
+            pngSignature.some(sig => hexSignature.startsWith(sig)) ||
+            gifSignature.some(sig => hexSignature.startsWith(sig)) ||
+            webpSignature.some(sig => hexSignature.startsWith(sig));
+            
+        if (!validSignature) {
+            throw new Error(`Invalid file signature: ${hexSignature}`);
+        }
+        
+        // Sanitize filename - extract extension from contentType
+        const extension = contentType?.split('/')[1]?.split(';')[0] || 'png';
+        const safeExtension = /^[a-zA-Z0-9]+$/.test(extension) ? extension : 'png';
+        const filename = `${userId}_${messageId}_${Date.now()}.${safeExtension}`;
+        
+        return {
+            attachment: Buffer.from(buffer),
+            name: `SPOILER_${filename}`,
+            contentType
+        };
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            console.error(`Image download timed out after 5000ms: ${attachment.url}`);
+        } else {
+            console.error('Error downloading image:', error);
+        }
+        return null;
+    }
+}
+
+async function logImages(message, settings) {
+    // Skip if already processing too many images from this guild
+    const guildKey = message.guild.id;
+    const now = Date.now();
+    
+    // Set up rate limiting
+    if (!imageDownloadQueue.has(guildKey)) {
+        imageDownloadQueue.set(guildKey, {
+            count: 0,
+            lastReset: now
+        });
+    }
+    
+    const queueInfo = imageDownloadQueue.get(guildKey);
+    
+    // Reset counter if time elapsed
+    if (now - queueInfo.lastReset > DOWNLOAD_RESET_TIME) {
+        queueInfo.count = 0;
+        queueInfo.lastReset = now;
+    }
+    
+    // Check if we're over the limit
+    if (queueInfo.count >= MAX_CONCURRENT_DOWNLOADS) {
+        console.log(`Skipping image download for guild ${guildKey} - rate limit reached`);
+        
+        // Just log the URLs without downloading
+        await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
+            userId: message.author.id,
+            userTag: message.author.tag,
+            channelId: message.channel.id,
+            messageId: message.id,
+            messageUrl: message.url,
+            content: sanitizeInput(message.content || 'No text content'),
+            attachments: [...message.attachments.values()].map(a => `|| ${a.url} ||`)
+        });
+        
+        return;
+    }
+    
+    // Increment counter
+    queueInfo.count++;
+    
+    try {
+        const imageAttachments = message.attachments.filter(a => 
+            a.contentType?.startsWith('image/jpeg') ||
+            a.contentType?.startsWith('image/png') ||
+            a.contentType?.startsWith('image/gif') ||
+            a.contentType?.startsWith('image/webp')
+        );
+        
+        if (imageAttachments.size === 0) return;
+        
+        // Limit to max 2 images per message for safety
+        const limitedAttachments = [...imageAttachments.values()].slice(0, 2);
+        
+        // Process downloads with proper error handling
+        const downloadPromises = limitedAttachments.map(attachment => 
+            downloadAndSaveImage(attachment, message.author.id, message.id)
+        );
+        
+        const attachmentResults = await Promise.all(downloadPromises);
+        const validAttachments = attachmentResults.filter(Boolean);
+        
+        // Log with downloaded files
+        if (validAttachments.length > 0) {
+            await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
+                userId: message.author.id,
+                userTag: message.author.tag,
+                channelId: message.channel.id,
+                messageId: message.id,
+                messageUrl: message.url,
+                content: sanitizeInput(message.content || 'No text content'),
+                attachments: [...imageAttachments.values()].map(a => `|| ${a.url} ||`),
+                files: validAttachments
+            });
+            
+            // Clean up memory - the files are now on Discord's servers
+            validAttachments.forEach(attachment => {
+                // Explicitly null out the buffer to help garbage collection
+                if (attachment && attachment.attachment) {
+                    attachment.attachment = null;
+                }
+            });
+        } else {
+            // Log without files if none were successfully downloaded
+            await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
+                userId: message.author.id,
+                userTag: message.author.tag,
+                channelId: message.channel.id,
+                messageId: message.id,
+                messageUrl: message.url,
+                content: sanitizeInput(message.content || 'No text content'),
+                attachments: [...imageAttachments.values()].map(a => `|| ${a.url} ||`)
+            });
+        }
+    } catch (error) {
+        console.error('Error in image logging:', error);
+        
+        // Still try to log without downloaded files
+        await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
+            userId: message.author.id,
+            userTag: message.author.tag,
+            channelId: message.channel.id,
+            messageId: message.id,
+            messageUrl: message.url,
+            content: sanitizeInput(message.content || 'No text content'),
+            attachments: [...message.attachments.values()].map(a => `|| ${a.url} ||`)
+        });
+    } finally {
+        // Clean up queue after a delay to prevent duplicative processing
+        setTimeout(() => {
+            const currentQueue = imageDownloadQueue.get(guildKey);
+            if (currentQueue && currentQueue.count > 0) {
+                currentQueue.count--;
+            }
+        }, 5000);
+        
+        // Force garbage collection hint (Node will decide when to actually run GC)
+        if (global.gc) {
+            try {
+                global.gc();
+            } catch (e) {
+                // Ignore if not available
+            }
+        }
+    }
+}
+
+async function logMessagePurge(guild, messageCount, channel, executor, messages) {
+    try {
+        // Create a log of purged messages
+        let logContent = `Channel: <#${channel.id}>\n`;
+        logContent += `Purged by: <@${executor.id}> (${executor.tag})\n`;
+        logContent += `Messages purged: ${messageCount}\n\n`;
+        
+        // Process and include message content
+        if (messages && messages.size > 0) {
+            let detailedContent = [];
+            
+            messages.forEach(msg => {
+                if (!msg.author?.id) return; // Skip invalid messages
+                
+                let entry = `<@${msg.author.id}> (${msg.author.tag}) [<t:${Math.floor(msg.createdTimestamp/1000)}:f>]:\n`;
+                
+                // Include text content
+                if (msg.content) {
+                    entry += `${msg.content}\n`;
+                }
+                
+                // Include attachments
+                if (msg.attachments.size > 0) {
+                    const attachmentList = [];
+                    msg.attachments.forEach(attachment => {
+                        if (attachment.contentType?.startsWith('image/')) {
+                            attachmentList.push(`|| ${attachment.url} ||`);
+                        } else {
+                            attachmentList.push(attachment.url);
+                        }
+                    });
+                    
+                    if (attachmentList.length > 0) {
+                        entry += `Attachments: ${attachmentList.join(', ')}\n`;
+                    }
+                }
+                
+                detailedContent.push(entry);
+            });
+            
+            // Add the detailed message content
+            if (detailedContent.length > 0) {
+                logContent += detailedContent.join('\n');
+            }
+        }
+        
+        // Log the purge action
+        await loggingService.logEvent(guild, 'MESSAGES_PURGED', {
+            userId: executor.id,
+            userTag: executor.tag,
+            channelId: channel.id,
+            messageCount: messageCount,
+            purgeDetails: logContent
+        });
+    } catch (error) {
+        console.error('Error logging message purge:', {
+            error: error.message,
+            guildId: guild.id,
+            channelId: channel.id
         });
     }
 }
@@ -270,7 +571,11 @@ export async function initHandlers(client) {
                                 welcomeMessages.filter(msg => msg !== lastMessages[0])[
                                     Math.floor(Math.random() * (welcomeMessages.length - 1))
                                 ];
-                            const formattedMessage = sanitizeInput(messageToUse.replace(/\{user\}/g, member.toString()));
+                            
+                            // Fix: Properly replace {user} with member mention without sanitizing it out
+                            let formattedMessage = messageToUse.replace(/\{user\}/g, member.toString());
+                            formattedMessage = sanitizeInput(formattedMessage);
+                            
                             await db.addWelcomeMessageToHistory(guild.id, messageToUse);
                             const welcomeEmbed = new EmbedBuilder()
                                 .setColor('#00FF00')
@@ -313,7 +618,6 @@ export async function initHandlers(client) {
                             userTag: member.user.tag,
                             roleId: role.id,
                             roleName: role.name,
-                            userTag: member.user.tag,
                             reason: `Time-based role (${memberDays} days)`
                         });
                     }
@@ -375,23 +679,71 @@ export async function initHandlers(client) {
             messageId: oldMessage.id,
             oldContent: sanitizeInput(oldMessage.content),
             newContent: sanitizeInput(newMessage.content),
-            messageUrl: newMessage.url
+            messageUrl: newMessage.url,
+            attachments: newMessage.attachments.size > 0 ? 
+                Array.from(newMessage.attachments.values()).map(a => {
+                    if (a.contentType?.startsWith('image/')) {
+                        return `|| ${a.url} ||`; // Spoiler for images
+                    }
+                    return a.url;
+                }) : 
+                []
         });
     });
  
     client.on('messageDelete', async (message) => {
         if (message.author?.bot || !message.guild || message.filterDeleted) return;
         await ensureGuildSettings(message.guild);
+        
+        const attachmentsList = message.attachments.size > 0 ? 
+            Array.from(message.attachments.values()).map(a => {
+                if (a.contentType?.startsWith('image/')) {
+                    return `|| ${a.url} ||`; // Spoiler for images
+                }
+                return a.url;
+            }) : 
+            [];
+            
         await loggingService.logEvent(message.guild, 'MESSAGE_DELETE', {
             userId: message.author.id,
             userTag: message.author.tag,
             channelId: message.channel.id,
             messageId: message.id,
             content: sanitizeInput(message.content),
-            attachments: message.attachments.size > 0 ? 
-                Array.from(message.attachments.values()).map(a => a.url) : 
-                []
+            attachments: attachmentsList
         });
+    });
+    
+    // New event for message bulk delete (purging)
+    client.on('messageDeleteBulk', async (messages, channel) => {
+        try {
+            if (!channel.guild) return;
+            await ensureGuildSettings(channel.guild);
+            
+            // Try to find who initiated the purge from audit logs
+            const auditLogs = await channel.guild.fetchAuditLogs({
+                type: 73, // MESSAGE_BULK_DELETE
+                limit: 1,
+            });
+            
+            const bulkDeleteLog = auditLogs.entries.first();
+            let executor = channel.client.user; // Default to the bot
+            
+            if (bulkDeleteLog && (Date.now() - bulkDeleteLog.createdTimestamp) < 10000) {
+                // If audit log exists and is recent (within 10 seconds), use that executor
+                executor = bulkDeleteLog.executor;
+            }
+            
+            // Log the purge with detailed information
+            await logMessagePurge(channel.guild, messages.size, channel, executor, messages);
+            
+        } catch (error) {
+            console.error('Error handling bulk message delete:', {
+                error: error.message,
+                channelId: channel.id,
+                guildId: channel.guild?.id
+            });
+        }
     });
  
     client.on('voiceStateUpdate', async (oldState, newState) => {
@@ -437,6 +789,21 @@ export async function initHandlers(client) {
             await ensureGuildSettings(newMember.guild);
             const addedRoles = newMember.roles.cache.filter(role => !oldMember.roles.cache.has(role.id));
             const removedRoles = oldMember.roles.cache.filter(role => !newMember.roles.cache.has(role.id));
+            
+            // Check for recent role button interactions to avoid duplicate logging
+            const lastButtonInfo = global.lastRoleButtonInteractions.get(newMember.id);
+            const now = Date.now();
+            
+            if (lastButtonInfo && now - lastButtonInfo.time < 2000) {
+                // Check if this matches the exact role that was just modified via button
+                if ((lastButtonInfo.action === 'add' && addedRoles.has(lastButtonInfo.roleId)) || 
+                    (lastButtonInfo.action === 'remove' && removedRoles.has(lastButtonInfo.roleId))) {
+                    // Skip logging this role change as it was already handled by the button
+                    global.lastRoleButtonInteractions.delete(newMember.id);
+                    return;
+                }
+            }
+            
             for (const [roleId, role] of addedRoles) {
                 await loggingService.logEvent(newMember.guild, 'ROLE_ADD', {
                     userId: newMember.id,
@@ -556,13 +923,7 @@ export async function initHandlers(client) {
                             const otherRole = await interaction.guild.roles.fetch(otherId);
                             if (otherRole && member.roles.cache.has(otherId)) {
                                 await member.roles.remove(otherId);
-                                await loggingService.logEvent(interaction.guild, 'ROLE_REMOVE', {
-                                    userId: member.id,
-                                    userTag: member.user.tag,
-                                    roleId: otherId,
-                                    roleName: otherRole.name,
-                                    reason: 'Single-select role message'
-                                });
+                                // We don't need to log here as the guildMemberUpdate event will handle it
                             }
                         }
                     }
@@ -572,12 +933,11 @@ export async function initHandlers(client) {
                             content: `Removed role <@&${roleId}>`,
                             ephemeral: true
                         });
-                        await loggingService.logEvent(interaction.guild, 'ROLE_REMOVE', {
-                            userId: member.id,
-                            userTag: member.user.tag,
+                        // Add to the tracking map to prevent duplicate logs
+                        global.lastRoleButtonInteractions.set(member.id, {
+                            time: Date.now(),
                             roleId: roleId,
-                            roleName: role.name,
-                            reason: 'Role message selection'
+                            action: 'remove'
                         });
                     } else {
                         await member.roles.add(roleId);
@@ -585,12 +945,11 @@ export async function initHandlers(client) {
                             content: `Added role <@&${roleId}>`,
                             ephemeral: true
                         });
-                        await loggingService.logEvent(interaction.guild, 'ROLE_ADD', {
-                            userId: member.id,
-                            userTag: member.user.tag,
+                        // Add to the tracking map to prevent duplicate logs
+                        global.lastRoleButtonInteractions.set(member.id, {
+                            time: Date.now(),
                             roleId: roleId,
-                            roleName: role.name,
-                            reason: 'Role message selection'
+                            action: 'add'
                         });
                     }
                 } catch (error) {
@@ -778,6 +1137,14 @@ export async function initHandlers(client) {
                     }
                 }
             }
+            else if (interaction.customId === 'continue_setup') {
+                // This is handled directly in the setup command
+                return;
+            }
+            else if (interaction.customId === 'cancel_setup_role') {
+                // This is handled directly in the setup command
+                return;
+            }
         }
         else if (interaction.isAutocomplete()) {
             const command = client.commands.get(interaction.commandName);
@@ -892,6 +1259,14 @@ export async function initHandlers(client) {
                                 guildId: message.guild.id
                             });
                         }
+                    }
+                }
+                
+                // Log image attachments with secure image handling
+                if (message.guild && message.attachments.size > 0) {
+                    const settings = await db.getServerSettings(message.guild.id);
+                    if (settings?.log_channel_id) {
+                        await logImages(message, settings);
                     }
                 }
             }
@@ -1048,5 +1423,35 @@ export async function initHandlers(client) {
             }
         }
     });
+    
+    // Add clean shutdown handler
+    process.on('uncaughtException', async (error) => {
+        console.error('Uncaught exception:', error);
+        // Clean up any pending transactions
+        if (db.transactionTimeouts) {
+            for (const timeout of db.transactionTimeouts.values()) {
+                clearTimeout(timeout);
+            }
+            db.transactionTimeouts.clear();
+        }
+    });
+    
+    // Graceful shutdown handlers
+    process.on('SIGINT', async () => {
+        console.log('Received SIGINT, shutting down...');
+        if (db.shutdown) {
+            await db.shutdown();
+        }
+        process.exit(0);
+    });
+ 
+    process.on('SIGTERM', async () => {
+        console.log('Received SIGTERM, shutting down...');
+        if (db.shutdown) {
+            await db.shutdown();
+        }
+        process.exit(0);
+    });
+    
     console.log('Event handlers initialized');
-}
+ }

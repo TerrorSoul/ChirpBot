@@ -1,0 +1,6 @@
+{
+    "name": "rust",
+    "description": "Rust-specific commands",
+    "category": "Games",
+    "isCore": false
+}

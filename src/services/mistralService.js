@@ -44,6 +44,63 @@ export async function generateModCode(prompt, includeExplanation = false) {
     return chatResult.choices[0].message.content;
 }
 
+export async function analyzeMessage(content) {
+    const chatResult = await mistralClient.chat({
+        model: "open-mistral-7b", 
+        messages: [
+            {
+                role: "system", 
+                content: `
+                    You are a moderation assistant. Analyze the following message based on these server rules:
+                    1. If staff (Moderators and/or Devs) tell you to stop a certain behavior, just stop.
+                    2. No discrimination - No hate speech or offensive language (e.g., swastikas, fascist references, racist, sexist).
+                    3. Arguments are fine, but be civilized. Don’t insult or degrade others.
+                    4. No NSFW content or chatting.
+                    5. No mindless shitposting (including in off-topic channels).
+                    6. Stay on topic in channels, read channel descriptions if unsure.
+                    7. No advertising or promoting other servers.
+                    8. This is an English-speaking server.
+                    9. No disruptive or annoying behavior (e.g., excessive spam or disruptive actions).
+
+                    For each message, provide the following response:
+                    - **Action:** <recommended action>
+                    - **Reason:** <reason for action>
+                    If no action is required, state "No action needed" with a reason if appropriate. If the message violates any rules, suggest an action like "Warn user", "Mute user", "Delete message", etc.
+                `
+            },
+            {
+                role: "user", 
+                content: `Analyze the following message based on the above rules: "${content}"`
+            }
+        ]
+    });
+
+    const responseMessage = chatResult.choices[0].message.content.trim();
+    
+    return responseMessage;
+}
+
+export async function translateToEnglish(text) {
+    const chatResult = await mistralClient.chat({
+        model: "open-mistral-7b", 
+        messages: [
+            {
+                role: "system", 
+                content: "You are a translation assistant. Please provide only the translated text in English, without any explanations, brackets, or additional context. Do not remove any brackets that exist in the original text."
+            },
+            {
+                role: "user", 
+                content: `Translate the following text to English: ${text}`
+            }
+        ]
+    });
+
+    const translatedMessage = chatResult.choices[0].message.content.trim();
+    
+    return translatedMessage.replace(/\(.*\)$/g, '').trim();
+}
+
+
 export async function explainCode(code) {
     const result = await mistralClient.chat({
         model: "codestral-mamba-2407",

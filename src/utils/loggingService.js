@@ -43,6 +43,24 @@ class LoggingService {
        setInterval(() => this.cleanCache(), this.THREAD_CLEANUP_INTERVAL);
    }
 
+   clearAllCaches() {
+        try {
+            this.threadCache.clear();
+            this.lastThreadActivity.clear();
+            this.threadCreationLocks.clear();
+            
+            // Clear any pending timeouts
+            for (const [lockKey, timeoutId] of this.threadDeletionQueue.entries()) {
+                clearTimeout(timeoutId);
+                this.threadDeletionQueue.delete(lockKey);
+            }
+            
+            console.log('Cleared all logging service caches');
+        } catch (error) {
+            console.error('Error clearing logging service caches:', error);
+        }
+    }
+
    async initializeForumChannel(channel) {
         try {
             if (!channel || !channel.guild) {
@@ -756,15 +774,27 @@ async logEvent(guild, type, data, retryCount = 0) {
                     const generalThread = await this.getOrCreateGeneralThread(logChannel);
                     if (generalThread) {
                         try {
-                            await generalThread.send({ embeds: [embed] });
+                            if (eventData.files) {
+                                await generalThread.send({ embeds: [embed], files: eventData.files });
+                            } else {
+                                await generalThread.send({ embeds: [embed] });
+                            }
                         } catch (threadSendError) {
                             console.error('Error sending to general thread:', threadSendError);
                             // Fall back to main channel
-                            await logChannel.send({ embeds: [embed] }).catch(() => {});
+                            if (eventData.files) {
+                                await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
+                            } else {
+                                await logChannel.send({ embeds: [embed] }).catch(() => {});
+                            }
                         }
                     } else {
                         // Fallback to main channel
-                        await logChannel.send({ embeds: [embed] }).catch(() => {});
+                        if (eventData.files) {
+                            await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
+                        } else {
+                            await logChannel.send({ embeds: [embed] }).catch(() => {});
+                        }
                     }
                     return;
                 }
@@ -779,30 +809,52 @@ async logEvent(guild, type, data, retryCount = 0) {
                 if (!thread) {
                     // Fallback if thread creation fails
                     console.warn(`Thread creation failed for user ${eventData.userId}, sending to main channel`);
-                    await logChannel.send({ embeds: [embed] }).catch(mainError => {
-                        console.error('Error sending to main channel:', mainError);
-                    });
+                    if (eventData.files) {
+                        await logChannel.send({ embeds: [embed], files: eventData.files }).catch(mainError => {
+                            console.error('Error sending to main channel:', mainError);
+                        });
+                    } else {
+                        await logChannel.send({ embeds: [embed] }).catch(mainError => {
+                            console.error('Error sending to main channel:', mainError);
+                        });
+                    }
                     return;
                 }
 
                 // Send to thread with retry
                 try {
-                    await thread.send({ embeds: [embed] });
+                    if (eventData.files) {
+                        await thread.send({ embeds: [embed], files: eventData.files });
+                    } else {
+                        await thread.send({ embeds: [embed] });
+                    }
                 } catch (threadError) {
                     console.error(`Error sending to thread for user ${eventData.userId}:`, threadError);
                     // Try updating thread status and retry once
                     if (thread.archived) {
                         try {
                             await thread.setArchived(false);
-                            await thread.send({ embeds: [embed] });
+                            if (eventData.files) {
+                                await thread.send({ embeds: [embed], files: eventData.files });
+                            } else {
+                                await thread.send({ embeds: [embed] });
+                            }
                         } catch (retryError) {
                             console.error('Error after thread unarchive retry:', retryError);
                             // Final fallback
-                            await logChannel.send({ embeds: [embed] }).catch(() => {});
+                            if (eventData.files) {
+                                await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
+                            } else {
+                                await logChannel.send({ embeds: [embed] }).catch(() => {});
+                            }
                         }
                     } else {
                         // Fallback to main channel
-                        await logChannel.send({ embeds: [embed] }).catch(() => {});
+                        if (eventData.files) {
+                            await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
+                        } else {
+                            await logChannel.send({ embeds: [embed] }).catch(() => {});
+                        }
                     }
                 }
 
@@ -827,7 +879,11 @@ async logEvent(guild, type, data, retryCount = 0) {
                 
                 // Fallback to main channel if thread handling fails
                 try {
-                    await logChannel.send({ embeds: [embed] });
+                    if (eventData.files) {
+                        await logChannel.send({ embeds: [embed], files: eventData.files });
+                    } else {
+                        await logChannel.send({ embeds: [embed] });
+                    }
                 } catch (fallbackError) {
                     console.error('Error in fallback logging:', fallbackError);
                 }
@@ -841,7 +897,11 @@ async logEvent(guild, type, data, retryCount = 0) {
                     embed.setDescription(`User: ${userMention}\n${baseDescription}`);
                 }
                 
-                await logChannel.send({ embeds: [embed] });
+                if (eventData.files) {
+                    await logChannel.send({ embeds: [embed], files: eventData.files });
+                } else {
+                    await logChannel.send({ embeds: [embed] });
+                }
             } catch (error) {
                 const isDiscordAPIError = error.code >= 10000 && error.code <= 20000;
                 
@@ -875,6 +935,30 @@ cleanCache() {
         const now = Date.now();
         const maxAge = this.THREAD_CLEANUP_INTERVAL;
         const threadsToArchive = [];
+        
+        // Limit cache size to prevent memory issues
+        if (this.threadCache.size > 1000) {
+            console.log(`Thread cache size (${this.threadCache.size}) exceeds limit, forcing cleanup`);
+            // Keep only the 500 most recently active threads
+            const sortedByActivity = [...this.lastThreadActivity.entries()]
+                .sort(([, a], [, b]) => b - a) // Most recent first
+                .slice(0, 500);
+            
+            // Reset to only these threads
+            const newThreadCache = new Map();
+            const newLastThreadActivity = new Map();
+            
+            for (const [id, timestamp] of sortedByActivity) {
+                const thread = this.threadCache.get(id);
+                if (thread) {
+                    newThreadCache.set(id, thread);
+                    newLastThreadActivity.set(id, timestamp);
+                }
+            }
+            
+            this.threadCache = newThreadCache;
+            this.lastThreadActivity = newLastThreadActivity;
+        }
 
         // Identify old threads
         for (const [userId, lastActivity] of this.lastThreadActivity.entries()) {
@@ -1370,6 +1454,84 @@ createLogEmbed(type, data) {
                 }
                 break;
 
+            case 'IMAGE_POSTED':
+                embed
+                    .setColor(this.colors.INFO)
+                    .setTitle('Image Posted')
+                    .setDescription(`User posted ${data.attachments?.length || 0} image(s) in <#${data.channelId}>`);
+                    
+                if (data.content && data.content.trim().length > 0) {
+                    embed.addFields({
+                        name: 'Message Content',
+                        value: data.content.length > 1024 ? 
+                            `${data.content.substring(0, 1021)}...` : 
+                            data.content,
+                        inline: false
+                    });
+                }
+                
+                if (data.messageUrl) {
+                    embed.addFields({
+                        name: 'Message Link',
+                        value: data.messageUrl,
+                        inline: false
+                    });
+                }
+                
+                if (data.attachments?.length > 0) {
+                    embed.addFields({
+                        name: 'Image Links (Spoilered)',
+                        value: data.attachments.join('\n'),
+                        inline: false
+                    });
+                }
+                break;
+
+            case 'MESSAGES_PURGED':
+                embed
+                    .setColor(this.colors.WARNING)
+                    .setTitle('Messages Purged')
+                    .setDescription(`${data.messageCount} messages were purged from <#${data.channelId}> by ${data.userTag}`);
+                
+                if (data.purgeDetails) {
+                    // Split long purge details into multiple fields if needed
+                    const maxFieldLength = 1024;
+                    const chunks = [];
+                    let currentChunk = '';
+                    
+                    const lines = data.purgeDetails.split('\n');
+                    for (const line of lines) {
+                        if (currentChunk.length + line.length + 1 > maxFieldLength) {
+                            chunks.push(currentChunk);
+                            currentChunk = line;
+                        } else {
+                            currentChunk += (currentChunk ? '\n' : '') + line;
+                        }
+                    }
+                    
+                    if (currentChunk) {
+                        chunks.push(currentChunk);
+                    }
+                    
+                    // Add up to 5 fields with the details
+                    for (let i = 0; i < Math.min(chunks.length, 5); i++) {
+                        embed.addFields({
+                            name: i === 0 ? 'Purged Messages' : `Purged Messages (continued ${i})`,
+                            value: chunks[i],
+                            inline: false
+                        });
+                    }
+                    
+                    if (chunks.length > 5) {
+                        embed.addFields({
+                            name: 'Note',
+                            value: `${chunks.length - 5} more sections of purged messages not shown due to Discord limitations`,
+                            inline: false
+                        });
+                    }
+                }
+                break;
+
             case 'VOICE_JOIN':
                 embed
                     .setColor(this.colors.SUCCESS)
@@ -1421,89 +1583,89 @@ createLogEmbed(type, data) {
                 break;
 
             case 'TICKET_CREATED':
-            case 'TICKET_CLOSED':
-            case 'TICKET_DELETED':
-                this.createTicketEmbed(embed, type, data);
-                break;
+               case 'TICKET_CLOSED':
+               case 'TICKET_DELETED':
+                   this.createTicketEmbed(embed, type, data);
+                   break;
 
-            case 'REPORT_RECEIVED':
-            case 'REPORT_RESOLVE':
-            case 'REPORT_DELETE':
-                this.createReportEmbed(embed, type, data);
-                break;
+               case 'REPORT_RECEIVED':
+               case 'REPORT_RESOLVE':
+               case 'REPORT_DELETE':
+                   this.createReportEmbed(embed, type, data);
+                   break;
 
-            case 'ROLE_ADD':
-            case 'ROLE_REMOVE':
-                const roleAction = type === 'ROLE_ADD' ? 'Added' : 'Removed';
-                const sanitizedRoleName = data.roleName ? sanitizeInput(String(data.roleName)) : 'Unknown Role';
-                const roleReason = data.reason ? sanitizeInput(String(data.reason)) : 'No reason provided';
-                
-                embed
-                    .setColor(type === 'ROLE_ADD' ? this.colors.SUCCESS : this.colors.ERROR)
-                    .setTitle(`Role ${roleAction}`)
-                    .setDescription(`A role was ${type === 'ROLE_ADD' ? 'added to' : 'removed from'} the user`)
-                    .addFields(
-                        { name: 'Role', value: sanitizedRoleName },
-                        { name: 'Reason', value: roleReason }
-                    );
-                break;
+               case 'ROLE_ADD':
+               case 'ROLE_REMOVE':
+                   const roleAction = type === 'ROLE_ADD' ? 'Added' : 'Removed';
+                   const sanitizedRoleName = data.roleName ? sanitizeInput(String(data.roleName)) : 'Unknown Role';
+                   const roleReason = data.reason ? sanitizeInput(String(data.reason)) : 'No reason provided';
+                   
+                   embed
+                       .setColor(type === 'ROLE_ADD' ? this.colors.SUCCESS : this.colors.ERROR)
+                       .setTitle(`Role ${roleAction}`)
+                       .setDescription(`A role was ${type === 'ROLE_ADD' ? 'added to' : 'removed from'} the user`)
+                       .addFields(
+                           { name: 'Role', value: sanitizedRoleName },
+                           { name: 'Reason', value: roleReason }
+                       );
+                   break;
 
-            case 'COMMAND_USE':
-                const sanitizedCommand = data.commandName ? sanitizeInput(String(data.commandName)) : 'Unknown';
-                
-                embed
-                    .setColor(this.colors.INFO)
-                    .setTitle('Command Used');
-                    
-                if (data.channelId) {
-                    embed.setDescription(`Command used in <#${data.channelId}>`);
-                }
-                
-                embed.addFields(
-                    { name: 'Command', value: `/${sanitizedCommand}` }
-                );
-                
-                if (data.options) {
-                    const safeOptions = sanitizeInput(String(data.options));
-                    if (safeOptions && safeOptions.length > 0) {
-                        embed.addFields({ 
-                            name: 'Options', 
-                            value: safeOptions.length > 1024 ? 
-                                safeOptions.substring(0, 1021) + '...' : 
-                                safeOptions 
-                        });
-                    }
-                }
-                break;
+               case 'COMMAND_USE':
+                   const sanitizedCommand = data.commandName ? sanitizeInput(String(data.commandName)) : 'Unknown';
+                   
+                   embed
+                       .setColor(this.colors.INFO)
+                       .setTitle('Command Used');
+                       
+                   if (data.channelId) {
+                       embed.setDescription(`Command used in <#${data.channelId}>`);
+                   }
+                   
+                   embed.addFields(
+                       { name: 'Command', value: `/${sanitizedCommand}` }
+                   );
+                   
+                   if (data.options) {
+                       const safeOptions = sanitizeInput(String(data.options));
+                       if (safeOptions && safeOptions.length > 0) {
+                           embed.addFields({ 
+                               name: 'Options', 
+                               value: safeOptions.length > 1024 ? 
+                                   safeOptions.substring(0, 1021) + '...' : 
+                                   safeOptions 
+                           });
+                       }
+                   }
+                   break;
 
-            default:
-                embed
-                    .setColor(this.colors.INFO)
-                    .setTitle('Event Log')
-                    .setDescription(`Event type: ${sanitizeInput(String(type))}`);
-        }
+               default:
+                   embed
+                       .setColor(this.colors.INFO)
+                       .setTitle('Event Log')
+                       .setDescription(`Event type: ${sanitizeInput(String(type))}`);
+           }
 
-        return embed;
-    } catch (error) {
-        console.error('Error creating log embed:', error);
-        
-        // Return a simple error embed as fallback
-        return new EmbedBuilder()
-            .setColor('#FF0000')
-            .setTitle('Error Creating Log')
-            .setDescription('An error occurred while creating this log entry')
-            .setTimestamp();
-    }
-}
+           return embed;
+       } catch (error) {
+           console.error('Error creating log embed:', error);
+           
+           // Return a simple error embed as fallback
+           return new EmbedBuilder()
+               .setColor('#FF0000')
+               .setTitle('Error Creating Log')
+               .setDescription('An error occurred while creating this log entry')
+               .setTimestamp();
+       }
+   }
 }
 
 export const loggingService = new LoggingService();
 
 // Clean cache every hour - improved with error handling
 setInterval(() => {
-    try {
-        loggingService.cleanCache();
-    } catch (error) {
-        console.error('Error in logging service cleanup interval:', error);
-    }
+   try {
+       loggingService.cleanCache();
+   } catch (error) {
+       console.error('Error in logging service cleanup interval:', error);
+   }
 }, 60 * 60 * 1000);

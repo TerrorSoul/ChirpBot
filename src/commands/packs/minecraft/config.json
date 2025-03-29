@@ -1,0 +1,6 @@
+{
+    "name": "minecraft",
+    "description": "Minecraft-specific commands",
+    "category": "Games",
+    "isCore": false
+}
