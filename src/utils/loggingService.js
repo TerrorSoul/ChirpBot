@@ -25,7 +25,9 @@ class LoggingService {
            'SUCCESS': '#00FF00',
            'WARNING': '#FFA500',
            'INFO': '#0099FF',
-           'ERROR': '#FF0000'
+           'ERROR': '#FF0000',
+           'IMAGE': '#3498db',
+           'PURGE': '#FFA500'
        };
        
        this.icons = {
@@ -36,7 +38,9 @@ class LoggingService {
            'SUCCESS': '✅',
            'WARNING': '⚠️',
            'INFO': 'ℹ️',
-           'ERROR': '❌'
+           'ERROR': '❌',
+           'IMAGE': '🖼️',
+           'PURGE': '🧹'
        };
 
        // Start cleanup interval
@@ -756,8 +760,8 @@ async logEvent(guild, type, data, retryCount = 0) {
             eventData.content = sanitizeInput(String(eventData.content)).slice(0, this.MAX_CONTENT_LENGTH);
         }
 
-        // Create embed with all validations handled inside
-        const embed = this.createLogEmbed(eventType, eventData);
+        // If custom embeds are provided, use those instead of generating a new one
+        const embed = eventData.embeds ? null : this.createLogEmbed(eventType, eventData);
 
         if (logChannel.type === ChannelType.GuildForum) {
             try {
@@ -774,7 +778,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                     const generalThread = await this.getOrCreateGeneralThread(logChannel);
                     if (generalThread) {
                         try {
-                            if (eventData.files) {
+                            if (eventData.embeds) {
+                                await generalThread.send({ embeds: eventData.embeds, files: eventData.files || [] });
+                            } else if (eventData.files) {
                                 await generalThread.send({ embeds: [embed], files: eventData.files });
                             } else {
                                 await generalThread.send({ embeds: [embed] });
@@ -782,7 +788,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                         } catch (threadSendError) {
                             console.error('Error sending to general thread:', threadSendError);
                             // Fall back to main channel
-                            if (eventData.files) {
+                            if (eventData.embeds) {
+                                await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] }).catch(() => {});
+                            } else if (eventData.files) {
                                 await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
                             } else {
                                 await logChannel.send({ embeds: [embed] }).catch(() => {});
@@ -790,7 +798,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                         }
                     } else {
                         // Fallback to main channel
-                        if (eventData.files) {
+                        if (eventData.embeds) {
+                            await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] }).catch(() => {});
+                        } else if (eventData.files) {
                             await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
                         } else {
                             await logChannel.send({ embeds: [embed] }).catch(() => {});
@@ -809,7 +819,11 @@ async logEvent(guild, type, data, retryCount = 0) {
                 if (!thread) {
                     // Fallback if thread creation fails
                     console.warn(`Thread creation failed for user ${eventData.userId}, sending to main channel`);
-                    if (eventData.files) {
+                    if (eventData.embeds) {
+                        await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] }).catch(mainError => {
+                            console.error('Error sending to main channel:', mainError);
+                        });
+                    } else if (eventData.files) {
                         await logChannel.send({ embeds: [embed], files: eventData.files }).catch(mainError => {
                             console.error('Error sending to main channel:', mainError);
                         });
@@ -823,7 +837,9 @@ async logEvent(guild, type, data, retryCount = 0) {
 
                 // Send to thread with retry
                 try {
-                    if (eventData.files) {
+                    if (eventData.embeds) {
+                        await thread.send({ embeds: eventData.embeds, files: eventData.files || [] });
+                    } else if (eventData.files) {
                         await thread.send({ embeds: [embed], files: eventData.files });
                     } else {
                         await thread.send({ embeds: [embed] });
@@ -834,7 +850,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                     if (thread.archived) {
                         try {
                             await thread.setArchived(false);
-                            if (eventData.files) {
+                            if (eventData.embeds) {
+                                await thread.send({ embeds: eventData.embeds, files: eventData.files || [] });
+                            } else if (eventData.files) {
                                 await thread.send({ embeds: [embed], files: eventData.files });
                             } else {
                                 await thread.send({ embeds: [embed] });
@@ -842,7 +860,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                         } catch (retryError) {
                             console.error('Error after thread unarchive retry:', retryError);
                             // Final fallback
-                            if (eventData.files) {
+                            if (eventData.embeds) {
+                                await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] }).catch(() => {});
+                            } else if (eventData.files) {
                                 await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
                             } else {
                                 await logChannel.send({ embeds: [embed] }).catch(() => {});
@@ -850,7 +870,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                         }
                     } else {
                         // Fallback to main channel
-                        if (eventData.files) {
+                        if (eventData.embeds) {
+                            await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] }).catch(() => {});
+                        } else if (eventData.files) {
                             await logChannel.send({ embeds: [embed], files: eventData.files }).catch(() => {});
                         } else {
                             await logChannel.send({ embeds: [embed] }).catch(() => {});
@@ -879,7 +901,9 @@ async logEvent(guild, type, data, retryCount = 0) {
                 
                 // Fallback to main channel if thread handling fails
                 try {
-                    if (eventData.files) {
+                    if (eventData.embeds) {
+                        await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] });
+                    } else if (eventData.files) {
                         await logChannel.send({ embeds: [embed], files: eventData.files });
                     } else {
                         await logChannel.send({ embeds: [embed] });
@@ -891,13 +915,15 @@ async logEvent(guild, type, data, retryCount = 0) {
         } else if (logChannel.type === ChannelType.GuildText) {
             try {
                 // For regular text channels, add user mention to description if available
-                if (eventData.userId) {
+                if (eventData.userId && !eventData.embeds) {
                     const userMention = `<@${eventData.userId}> (${eventData.userTag || eventData.userId})`;
                     const baseDescription = embed.data.description || '';
                     embed.setDescription(`User: ${userMention}\n${baseDescription}`);
                 }
                 
-                if (eventData.files) {
+                if (eventData.embeds) {
+                    await logChannel.send({ embeds: eventData.embeds, files: eventData.files || [] });
+                } else if (eventData.files) {
                     await logChannel.send({ embeds: [embed], files: eventData.files });
                 } else {
                     await logChannel.send({ embeds: [embed] });
@@ -1456,7 +1482,7 @@ createLogEmbed(type, data) {
 
             case 'IMAGE_POSTED':
                 embed
-                    .setColor(this.colors.INFO)
+                    .setColor(this.colors.IMAGE)
                     .setTitle('Image Posted')
                     .setDescription(`User posted ${data.attachments?.length || 0} image(s) in <#${data.channelId}>`);
                     
@@ -1489,47 +1515,20 @@ createLogEmbed(type, data) {
 
             case 'MESSAGES_PURGED':
                 embed
-                    .setColor(this.colors.WARNING)
+                    .setColor(this.colors.PURGE)
                     .setTitle('Messages Purged')
-                    .setDescription(`${data.messageCount} messages were purged from <#${data.channelId}> by ${data.userTag}`);
-                
-                if (data.purgeDetails) {
-                    // Split long purge details into multiple fields if needed
-                    const maxFieldLength = 1024;
-                    const chunks = [];
-                    let currentChunk = '';
-                    
-                    const lines = data.purgeDetails.split('\n');
-                    for (const line of lines) {
-                        if (currentChunk.length + line.length + 1 > maxFieldLength) {
-                            chunks.push(currentChunk);
-                            currentChunk = line;
-                        } else {
-                            currentChunk += (currentChunk ? '\n' : '') + line;
-                        }
-                    }
-                    
-                    if (currentChunk) {
-                        chunks.push(currentChunk);
-                    }
-                    
-                    // Add up to 5 fields with the details
-                    for (let i = 0; i < Math.min(chunks.length, 5); i++) {
-                        embed.addFields({
-                            name: i === 0 ? 'Purged Messages' : `Purged Messages (continued ${i})`,
-                            value: chunks[i],
-                            inline: false
-                        });
-                    }
-                    
-                    if (chunks.length > 5) {
-                        embed.addFields({
-                            name: 'Note',
-                            value: `${chunks.length - 5} more sections of purged messages not shown due to Discord limitations`,
-                            inline: false
-                        });
-                    }
-                }
+                    .setDescription(`${data.messageCount} messages were purged from <#${data.channelId}>`)
+                    .addFields(
+                        { name: 'Moderator', value: `<@${data.userId}> (${data.userTag})` },
+                        { name: 'Reason', value: data.reason || 'No reason provided' }
+                    );
+                break;
+
+            case 'USER_MESSAGES_PURGED':
+                embed
+                    .setColor(this.colors.PURGE)
+                    .setTitle('User Messages Purged')
+                    .setDescription(`Messages from this user were purged from <#${data.channelId}>`);
                 break;
 
             case 'VOICE_JOIN':
@@ -1583,79 +1582,79 @@ createLogEmbed(type, data) {
                 break;
 
             case 'TICKET_CREATED':
-               case 'TICKET_CLOSED':
-               case 'TICKET_DELETED':
-                   this.createTicketEmbed(embed, type, data);
-                   break;
+            case 'TICKET_CLOSED':
+            case 'TICKET_DELETED':
+                this.createTicketEmbed(embed, type, data);
+                break;
 
-               case 'REPORT_RECEIVED':
-               case 'REPORT_RESOLVE':
-               case 'REPORT_DELETE':
-                   this.createReportEmbed(embed, type, data);
-                   break;
+            case 'REPORT_RECEIVED':
+            case 'REPORT_RESOLVE':
+            case 'REPORT_DELETE':
+                this.createReportEmbed(embed, type, data);
+                break;
 
-               case 'ROLE_ADD':
-               case 'ROLE_REMOVE':
-                   const roleAction = type === 'ROLE_ADD' ? 'Added' : 'Removed';
-                   const sanitizedRoleName = data.roleName ? sanitizeInput(String(data.roleName)) : 'Unknown Role';
-                   const roleReason = data.reason ? sanitizeInput(String(data.reason)) : 'No reason provided';
-                   
-                   embed
-                       .setColor(type === 'ROLE_ADD' ? this.colors.SUCCESS : this.colors.ERROR)
-                       .setTitle(`Role ${roleAction}`)
-                       .setDescription(`A role was ${type === 'ROLE_ADD' ? 'added to' : 'removed from'} the user`)
-                       .addFields(
-                           { name: 'Role', value: sanitizedRoleName },
-                           { name: 'Reason', value: roleReason }
-                       );
-                   break;
+            case 'ROLE_ADD':
+            case 'ROLE_REMOVE':
+                const roleAction = type === 'ROLE_ADD' ? 'Added' : 'Removed';
+                const sanitizedRoleName = data.roleName ? sanitizeInput(String(data.roleName)) : 'Unknown Role';
+                const roleReason = data.reason ? sanitizeInput(String(data.reason)) : 'No reason provided';
+                
+                embed
+                    .setColor(type === 'ROLE_ADD' ? this.colors.SUCCESS : this.colors.ERROR)
+                    .setTitle(`Role ${roleAction}`)
+                    .setDescription(`A role was ${type === 'ROLE_ADD' ? 'added to' : 'removed from'} the user`)
+                    .addFields(
+                        { name: 'Role', value: sanitizedRoleName },
+                        { name: 'Reason', value: roleReason }
+                    );
+                break;
 
-               case 'COMMAND_USE':
-                   const sanitizedCommand = data.commandName ? sanitizeInput(String(data.commandName)) : 'Unknown';
-                   
-                   embed
-                       .setColor(this.colors.INFO)
-                       .setTitle('Command Used');
-                       
-                   if (data.channelId) {
-                       embed.setDescription(`Command used in <#${data.channelId}>`);
-                   }
-                   
-                   embed.addFields(
-                       { name: 'Command', value: `/${sanitizedCommand}` }
-                   );
-                   
-                   if (data.options) {
-                       const safeOptions = sanitizeInput(String(data.options));
-                       if (safeOptions && safeOptions.length > 0) {
-                           embed.addFields({ 
-                               name: 'Options', 
-                               value: safeOptions.length > 1024 ? 
-                                   safeOptions.substring(0, 1021) + '...' : 
-                                   safeOptions 
-                           });
-                       }
-                   }
-                   break;
+            case 'COMMAND_USE':
+                const sanitizedCommand = data.commandName ? sanitizeInput(String(data.commandName)) : 'Unknown';
+                
+                embed
+                    .setColor(this.colors.INFO)
+                    .setTitle('Command Used');
+                    
+                if (data.channelId) {
+                    embed.setDescription(`Command used in <#${data.channelId}>`);
+                }
+                
+                embed.addFields(
+                    { name: 'Command', value: `/${sanitizedCommand}` }
+                );
+                
+                if (data.options) {
+                    const safeOptions = sanitizeInput(String(data.options));
+                    if (safeOptions && safeOptions.length > 0) {
+                        embed.addFields({ 
+                            name: 'Options', 
+                            value: safeOptions.length > 1024 ? 
+                                safeOptions.substring(0, 1021) + '...' : 
+                                safeOptions 
+                        });
+                    }
+                }
+                break;
 
-               default:
-                   embed
-                       .setColor(this.colors.INFO)
-                       .setTitle('Event Log')
-                       .setDescription(`Event type: ${sanitizeInput(String(type))}`);
-           }
+            default:
+                embed
+                    .setColor(this.colors.INFO)
+                    .setTitle('Event Log')
+                    .setDescription(`Event type: ${sanitizeInput(String(type))}`);
+        }
 
-           return embed;
-       } catch (error) {
-           console.error('Error creating log embed:', error);
-           
-           // Return a simple error embed as fallback
-           return new EmbedBuilder()
-               .setColor('#FF0000')
-               .setTitle('Error Creating Log')
-               .setDescription('An error occurred while creating this log entry')
-               .setTimestamp();
-       }
+        return embed;
+    } catch (error) {
+        console.error('Error creating log embed:', error);
+        
+        // Return a simple error embed as fallback
+        return new EmbedBuilder()
+            .setColor('#FF0000')
+            .setTitle('Error Creating Log')
+            .setDescription('An error occurred while creating this log entry')
+            .setTimestamp();
+    }
    }
 }
 

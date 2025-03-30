@@ -323,49 +323,60 @@ async function logImages(message, settings) {
         
         if (imageAttachments.size === 0) return;
         
-        // Limit to max 2 images per message for safety
-        const limitedAttachments = [...imageAttachments.values()].slice(0, 2);
-        
-        // Process downloads with proper error handling
-        const downloadPromises = limitedAttachments.map(attachment => 
-            downloadAndSaveImage(attachment, message.author.id, message.id)
-        );
-        
-        const attachmentResults = await Promise.all(downloadPromises);
-        const validAttachments = attachmentResults.filter(Boolean);
-        
-        // Log with downloaded files
-        if (validAttachments.length > 0) {
-            await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
-                userId: message.author.id,
-                userTag: message.author.tag,
-                channelId: message.channel.id,
-                messageId: message.id,
-                messageUrl: message.url,
-                content: sanitizeInput(message.content || 'No text content'),
-                attachments: [...imageAttachments.values()].map(a => `|| ${a.url} ||`),
-                files: validAttachments
-            });
+        // Create a summary embed for the message
+        const summaryEmbed = new EmbedBuilder()
+            .setColor('#3498db')
+            .setTitle('Image(s) Posted')
+            .setDescription(`<@${message.author.id}> posted ${imageAttachments.size} image(s) in <#${message.channel.id}>`)
+            .addFields(
+                { name: 'Channel', value: `<#${message.channel.id}>` },
+                { name: 'Message Link', value: message.url }
+            )
+            .setTimestamp();
             
-            // Clean up memory - the files are now on Discord's servers
-            validAttachments.forEach(attachment => {
-                // Explicitly null out the buffer to help garbage collection
-                if (attachment && attachment.attachment) {
-                    attachment.attachment = null;
-                }
-            });
-        } else {
-            // Log without files if none were successfully downloaded
-            await loggingService.logEvent(message.guild, 'IMAGE_POSTED', {
-                userId: message.author.id,
-                userTag: message.author.tag,
-                channelId: message.channel.id,
-                messageId: message.id,
-                messageUrl: message.url,
-                content: sanitizeInput(message.content || 'No text content'),
-                attachments: [...imageAttachments.values()].map(a => `|| ${a.url} ||`)
+        if (message.content && message.content.trim().length > 0) {
+            summaryEmbed.addFields({
+                name: 'Message Content',
+                value: sanitizeInput(message.content).length > 1024 ? 
+                    `${sanitizeInput(message.content).substring(0, 1020)}...` : 
+                    sanitizeInput(message.content),
+                inline: false
             });
         }
+        
+        // For each image, create a separate log entry with the image embedded
+        for (const attachment of imageAttachments.values()) {
+            try {
+                const downloadedImage = await downloadAndSaveImage(attachment, message.author.id, message.id);
+                
+                if (downloadedImage) {
+                    const imageEmbed = new EmbedBuilder()
+                        .setColor('#3498db')
+                        .setTitle(`Image ${attachment.name || 'Attachment'}`)
+                        .setDescription(`Image posted by <@${message.author.id}> in <#${message.channel.id}>`)
+                        .setImage(`attachment://${downloadedImage.name}`)
+                        .addFields(
+                            { name: 'Message Link', value: message.url },
+                            { name: 'File Details', value: `Type: ${attachment.contentType || 'Unknown'} | Size: ${formatBytes(attachment.size || 0)}` }
+                        )
+                        .setTimestamp();
+                        
+                    // Log with each image in a separate embed with its file
+                    await loggingService.logEvent(message.guild, 'IMAGE_POSTED_DETAIL', {
+                        userId: message.author.id,
+                        userTag: message.author.tag,
+                        channelId: message.channel.id,
+                        messageId: message.id,
+                        messageUrl: message.url,
+                        embeds: [imageEmbed],
+                        files: [downloadedImage]
+                    });
+                }
+            } catch (imageError) {
+                console.error('Error processing individual image:', imageError);
+            }
+        }
+        
     } catch (error) {
         console.error('Error in image logging:', error);
         
@@ -399,68 +410,195 @@ async function logImages(message, settings) {
     }
 }
 
+// Helper function to format file sizes
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 async function logMessagePurge(guild, messageCount, channel, executor, messages, reason = "No reason provided") {
     try {
-        // Create a log of purged messages
-        let logContent = `Channel: <#${channel.id}>\n`;
-        logContent += `Purged by: <@${executor.id}> (${executor.tag})\n`;
-        logContent += `Reason: ${reason}\n`;
-        logContent += `Messages purged: ${messageCount}\n\n`;
-        
-        // Process and include message content
-        if (messages && messages.size > 0) {
-            let detailedContent = [];
+        // Create a summary embed
+        const summaryEmbed = new EmbedBuilder()
+            .setColor('#FFA500')
+            .setTitle('Messages Purged')
+            .setDescription(`${messageCount} messages were purged from <#${channel.id}>`)
+            .addFields(
+                { name: 'Moderator', value: `<@${executor.id}> (${executor.tag})` },
+                { name: 'Reason', value: reason },
+                { name: 'Channel', value: `<#${channel.id}>` },
+                { name: 'Time', value: `<t:${Math.floor(Date.now()/1000)}:F>` }
+            )
+            .setTimestamp();
             
-            messages.forEach(msg => {
-                if (!msg.author?.id) return; // Skip invalid messages
-                
-                let entry = `<@${msg.author.id}> (${msg.author.tag}) [<t:${Math.floor(msg.createdTimestamp/1000)}:f>]:\n`;
-                
-                // Include text content
-                if (msg.content) {
-                    entry += `${msg.content}\n`;
-                }
-                
-                // Include attachments
-                if (msg.attachments.size > 0) {
-                    const attachmentList = [];
-                    msg.attachments.forEach(attachment => {
-                        if (attachment.contentType?.startsWith('image/')) {
-                            attachmentList.push(`|| ${attachment.url} ||`);
-                        } else {
-                            attachmentList.push(attachment.url);
-                        }
-                    });
-                    
-                    if (attachmentList.length > 0) {
-                        entry += `Attachments: ${attachmentList.join(', ')}\n`;
-                    }
-                }
-                
-                detailedContent.push(entry);
-            });
-            
-            // Add the detailed message content
-            if (detailedContent.length > 0) {
-                logContent += detailedContent.join('\n');
-            }
-        }
-        
-        // Log the purge action - using executor's ID to ensure they get the log
+        // Log the summary in the moderator's thread
         await loggingService.logEvent(guild, 'MESSAGES_PURGED', {
-            userId: executor.id,  // This should direct the log to the moderator
+            userId: executor.id,
             userTag: executor.tag,
             channelId: channel.id,
             messageCount: messageCount,
             reason: reason,
-            purgeDetails: logContent
+            embeds: [summaryEmbed]
         });
+        
+        // If there are no messages to log details for, we're done
+        if (!messages || messages.size === 0) {
+            return;
+        }
+        
+        // Group messages by author
+        const messagesByAuthor = new Map();
+        messages.forEach(msg => {
+            if (!msg.author?.id) return;
+            
+            if (!messagesByAuthor.has(msg.author.id)) {
+                messagesByAuthor.set(msg.author.id, []);
+            }
+            messagesByAuthor.get(msg.author.id).push(msg);
+        });
+        
+        // Process each author's messages
+        for (const [authorId, authorMessages] of messagesByAuthor.entries()) {
+            const author = authorMessages[0].author;
+            if (!author) continue;
+            
+            // Create embeds for this author's messages (max 10 per message)
+            let authorEmbeds = [];
+            
+            // First embed includes purge information
+            const firstEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle(`Messages Purged - ${author.tag}`)
+                .setDescription(`${authorMessages.length} messages from this user were purged from <#${channel.id}>`)
+                .addFields(
+                    { name: 'Purged By', value: `<@${executor.id}> (${executor.tag})` },
+                    { name: 'Reason', value: reason },
+                    { name: 'Time', value: `<t:${Math.floor(Date.now()/1000)}:F>` }
+                )
+                .setTimestamp();
+                
+            authorEmbeds.push(firstEmbed);
+            
+            // Process messages in batches
+            for (let i = 0; i < authorMessages.length; i++) {
+                const msg = authorMessages[i];
+                
+                // Create an embed for each message
+                const messageEmbed = new EmbedBuilder()
+                    .setColor('#FFA500')
+                    .setTitle(`Purged Message ${i+1}/${authorMessages.length}`)
+                    .setDescription(`Message sent at <t:${Math.floor(msg.createdTimestamp/1000)}:F>`)
+                    .setTimestamp(msg.createdTimestamp);
+                    
+                // Add content if available
+                if (msg.content && msg.content.trim().length > 0) {
+                    const content = sanitizeInput(msg.content);
+                    messageEmbed.addFields({
+                        name: 'Content',
+                        value: content.length > 1024 ? `${content.substring(0, 1020)}...` : content
+                    });
+                }
+                
+                // Handle attachments
+                if (msg.attachments.size > 0) {
+                    const mediaTypes = [];
+                    
+                    msg.attachments.forEach(attachment => {
+                        if (attachment.contentType?.startsWith('image/')) {
+                            mediaTypes.push('image');
+                        } else if (attachment.contentType?.startsWith('video/')) {
+                            mediaTypes.push('video');
+                        } else if (attachment.contentType?.startsWith('audio/')) {
+                            mediaTypes.push('audio');
+                        } else {
+                            mediaTypes.push('file');
+                        }
+                    });
+                    
+                    // Count attachment types
+                    const counts = {};
+                    mediaTypes.forEach(type => {
+                        counts[type] = (counts[type] || 0) + 1;
+                    });
+                    
+                    // Add attachment info
+                    const attachmentDescriptions = Object.entries(counts)
+                        .map(([type, count]) => `${count}x ${type}${count > 1 ? 's' : ''}`);
+                        
+                    if (attachmentDescriptions.length > 0) {
+                        messageEmbed.addFields({
+                            name: 'Attachments',
+                            value: attachmentDescriptions.join(', ')
+                        });
+                    }
+                }
+                
+                authorEmbeds.push(messageEmbed);
+                
+                // Discord limits to 10 embeds per message
+                if (authorEmbeds.length >= 10 || i === authorMessages.length - 1) {
+                    // Log this batch of embeds to the user's thread
+                    await loggingService.logEvent(guild, 'USER_MESSAGES_PURGED', {
+                        userId: authorId,
+                        userTag: author.tag,
+                        channelId: channel.id,
+                        embeds: authorEmbeds
+                    });
+                    
+                    // Reset for next batch if there are more messages
+                    if (i < authorMessages.length - 1) {
+                        authorEmbeds = [];
+                        
+                        // Create continuation embed
+                        const continuationEmbed = new EmbedBuilder()
+                            .setColor('#FFA500')
+                            .setTitle(`Messages Purged (Continued)`)
+                            .setDescription(`Continued log of purged messages from <#${channel.id}>`)
+                            .setTimestamp();
+                            
+                        authorEmbeds.push(continuationEmbed);
+                    }
+                }
+            }
+        }
+        
     } catch (error) {
         console.error('Error logging message purge:', {
             error: error.message,
             guildId: guild.id,
             channelId: channel.id
         });
+        
+        // Fallback to a simpler log if detailed logging fails
+        try {
+            const fallbackEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle('Messages Purged')
+                .setDescription(`${messageCount} messages were purged from <#${channel.id}>`)
+                .addFields(
+                    { name: 'Moderator', value: `<@${executor.id}> (${executor.tag})` },
+                    { name: 'Reason', value: reason }
+                )
+                .setTimestamp();
+                
+            await loggingService.logEvent(guild, 'MESSAGES_PURGED', {
+                userId: executor.id,
+                userTag: executor.tag,
+                channelId: channel.id,
+                messageCount: messageCount,
+                reason: reason,
+                embeds: [fallbackEmbed]
+            });
+        } catch (fallbackError) {
+            console.error('Failed to send fallback purge log:', fallbackError);
+        }
     }
 }
 
