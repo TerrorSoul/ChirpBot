@@ -1,4 +1,6 @@
 // utils/reminderManager.js
+import { EmbedBuilder } from 'discord.js';
+
 class ReminderManager {
     constructor(client, db) {
         this.client = client;
@@ -7,22 +9,21 @@ class ReminderManager {
         this.initialized = false;
         this.isCheckingReminders = false;
         this.MAX_REMINDERS_PER_USER = 5;
+        this.rateLimitMap = new Map();
+        this.MAX_DMS_PER_MINUTE = 3;
+        this.RATE_LIMIT_WINDOW = 60 * 1000;
     }
     
     async initialize() {
         if (this.initialized) return;
         
         try {
-            // Only load reminders due in the next day
             const oneDay = 24 * 60 * 60 * 1000;
             const reminders = await this.db.getPendingRemindersInTimeframe(
                 new Date(),
                 new Date(Date.now() + oneDay)
             );
             
-            console.log(`Loaded ${reminders.length} pending reminders for next 24 hours`);
-            
-            // Set timeouts for each reminder
             for (const reminder of reminders) {
                 this.addReminder({
                     id: reminder.id,
@@ -30,16 +31,17 @@ class ReminderManager {
                     guildId: reminder.guild_id,
                     channelId: reminder.channel_id,
                     message: reminder.message,
-                    reminderTime: new Date(reminder.reminder_time)
+                    reminderTime: new Date(reminder.reminder_time),
+                    createdAt: reminder.created_at
                 });
             }
             
-            // Start periodic check for new reminders
-            setInterval(() => this.checkNewReminders(), 5 * 60 * 1000); // Check every 5 minutes
+            setInterval(() => this.checkNewReminders(), 5 * 60 * 1000);
+            setInterval(() => this.cleanupRateLimit(), 5 * 60 * 1000);
             
             this.initialized = true;
         } catch (error) {
-            console.error('Error initializing reminder manager:', error);
+            // Silent error handling
         }
     }
     
@@ -49,7 +51,6 @@ class ReminderManager {
         const delay = reminderTime - now;
     
         if (delay <= 0) {
-            // Reminder is already due, send it immediately
             await this.sendReminder(reminder);
             return;
         }
@@ -58,15 +59,49 @@ class ReminderManager {
     
         const timeout = setTimeout(async () => {
             if (delay <= timeoutDelay) {
-                await this.sendReminder(reminder); // Send reminder
+                await this.sendReminder(reminder);
             } else {
-                await this.addReminder(reminder); // Reset for next day
+                await this.addReminder(reminder);
             }
         }, timeoutDelay);
     
-        // Use consistent key - always the database ID
         const key = reminder.id;
         this.timeouts.set(key, timeout);
+    }
+
+    canSendDM(userId) {
+        const now = Date.now();
+        if (!this.rateLimitMap.has(userId)) {
+            this.rateLimitMap.set(userId, {
+                count: 1,
+                firstMessage: now
+            });
+            return true;
+        }
+        
+        const userLimit = this.rateLimitMap.get(userId);
+        
+        if (now - userLimit.firstMessage > this.RATE_LIMIT_WINDOW) {
+            userLimit.count = 1;
+            userLimit.firstMessage = now;
+            return true;
+        }
+        
+        if (userLimit.count >= this.MAX_DMS_PER_MINUTE) {
+            return false;
+        }
+        
+        userLimit.count++;
+        return true;
+    }
+
+    cleanupRateLimit() {
+        const now = Date.now();
+        for (const [userId, data] of this.rateLimitMap.entries()) {
+            if (now - data.firstMessage > this.RATE_LIMIT_WINDOW) {
+                this.rateLimitMap.delete(userId);
+            }
+        }
     }
      
     async sendReminder(reminder) {
@@ -74,36 +109,107 @@ class ReminderManager {
         
         try {
             const user = await this.client.users.fetch(reminder.userId);
+            const guild = reminder.guildId ? await this.client.guilds.fetch(reminder.guildId).catch(() => null) : null;
             
-            // First try to DM the user
-            try {
-                await user.send(`**Reminder:** ${reminder.message}`);
-            } catch (dmError) {
-                // If DM fails, send a more private channel notification
+            const reminderEmbed = new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('⏰ Reminder')
+                .setDescription(reminder.message)
+                .setFooter({ text: 'ChirpBot Reminder' })
+                .setTimestamp();
+
+            if (reminder.createdAt) {
+                reminderEmbed.addFields({
+                    name: '📅 Originally set',
+                    value: `<t:${Math.floor(new Date(reminder.createdAt).getTime() / 1000)}:R>`,
+                    inline: true
+                });
+            }
+
+            if (guild) {
+                reminderEmbed.addFields({
+                    name: '🏠 Server',
+                    value: guild.name,
+                    inline: true
+                });
+            }
+
+            let dmSent = false;
+            if (this.canSendDM(reminder.userId)) {
+                try {
+                    await user.send({ embeds: [reminderEmbed] });
+                    dmSent = true;
+                } catch (dmError) {
+                    // Silent error handling
+                }
+            }
+
+            if (!dmSent) {
                 try {
                     const channel = await this.client.channels.fetch(reminder.channelId);
                     if (channel && channel.isTextBased()) {
-                        // Send a message that only mentions the exact reminder content
-                        await channel.send(`<@${reminder.userId}> **Reminder!** Check your DMs or use \`/reminders list\` to see your reminders.`);
+                        const channelEmbed = new EmbedBuilder()
+                            .setColor('#FFA500')
+                            .setTitle('⏰ Reminder (DM Failed)')
+                            .setDescription('You have a reminder waiting! Check your DMs or use `/reminders list` to see it.')
+                            .addFields({
+                                name: '📝 Note',
+                                value: 'I couldn\'t send your reminder privately. Please check your privacy settings if you\'d like to receive reminders via DM.',
+                                inline: false
+                            });
+
+                        if (reminder.createdAt) {
+                            channelEmbed.addFields({
+                                name: '📅 Originally set',
+                                value: `<t:${Math.floor(new Date(reminder.createdAt).getTime() / 1000)}:R>`,
+                                inline: true
+                            });
+                        }
+
+                        if (guild) {
+                            channelEmbed.addFields({
+                                name: '🏠 Server',
+                                value: guild.name,
+                                inline: true
+                            });
+                        }
+
+                        channelEmbed
+                            .setFooter({ text: 'Use /reminders list to see your reminder content' })
+                            .setTimestamp();
+
+                        await channel.send({ 
+                            content: `<@${reminder.userId}>`,
+                            embeds: [channelEmbed] 
+                        });
                     }
                 } catch (channelError) {
-                    console.error('Error sending reminder to channel:', channelError);
+                    // Silent error handling
                 }
             }
             
-            // Clean up the reminder from the database
             if (reminder.id) {
                 await this.db.deleteReminder(reminder.id, reminder.userId);
             }
             
-            // Clear the timeout
             const key = reminder.id;
             if (this.timeouts.has(key)) {
                 clearTimeout(this.timeouts.get(key));
                 this.timeouts.delete(key);
             }
         } catch (error) {
-            console.error('Error sending reminder:', error);
+            try {
+                if (reminder.id) {
+                    await this.db.deleteReminder(reminder.id, reminder.userId);
+                }
+                const key = reminder.id;
+                if (this.timeouts.has(key)) {
+                    clearTimeout(this.timeouts.get(key));
+                    this.timeouts.delete(key);
+                }
+            } catch (cleanupError) {
+                // Silent error handling
+            }
         }
     }
     
@@ -113,7 +219,6 @@ class ReminderManager {
         this.isCheckingReminders = true;
         
         try {
-            // Get reminders that are due in the next 3 hours
             const now = Date.now();
             const threeHoursLater = now + (3 * 60 * 60 * 1000);
             const reminders = await this.db.getPendingRemindersInTimeframe(
@@ -132,12 +237,13 @@ class ReminderManager {
                         guildId: reminder.guild_id,
                         channelId: reminder.channel_id,
                         message: reminder.message,
-                        reminderTime: new Date(reminder.reminder_time)
+                        reminderTime: new Date(reminder.reminder_time),
+                        createdAt: reminder.created_at
                     });
                 }
             }
         } catch (error) {
-            console.error('Error checking for new reminders:', error);
+            // Silent error handling
         } finally {
             this.isCheckingReminders = false;
         }
@@ -152,7 +258,6 @@ class ReminderManager {
                 limit: this.MAX_REMINDERS_PER_USER 
             };
         } catch (error) {
-            console.error('Error checking user reminder limit:', error);
             return { canCreate: true, current: 0, limit: this.MAX_REMINDERS_PER_USER };
         }
     }
@@ -161,14 +266,12 @@ class ReminderManager {
         try {
             return await this.db.getUserReminders(userId);
         } catch (error) {
-            console.error('Error getting user reminders:', error);
             return [];
         }
     }
     
     async cancelReminder(id, userId) {
         try {
-    
             const key = id;
                 
             if (this.timeouts.has(key)) {
@@ -179,29 +282,66 @@ class ReminderManager {
                 return { success: false, reason: 'Timeout not found' };
             }
         } catch (error) {
-            console.error('Error cancelling reminder:', error);
             return { success: false, reason: 'Error clearing timeout' };
         }
     }
     
-    // Clean up when shutting down
     cleanup() {
         for (const timeout of this.timeouts.values()) {
             clearTimeout(timeout);
         }
         this.timeouts.clear();
+        this.rateLimitMap.clear();
     }
     
-    // Get statistics about active reminders
     getStats() {
+        const memoryUsage = process.memoryUsage();
         return {
             activeReminders: this.timeouts.size,
-            memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024, // in MB
+            rateLimitEntries: this.rateLimitMap.size,
+            memoryUsage: {
+                heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+                heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+                rss: Math.round(memoryUsage.rss / 1024 / 1024)
+            },
+            initialized: this.initialized,
+            isCheckingReminders: this.isCheckingReminders
         };
+    }
+
+    getReminderInfo(reminderId) {
+        const hasTimeout = this.timeouts.has(reminderId);
+        return {
+            id: reminderId,
+            hasActiveTimeout: hasTimeout,
+            timeoutExists: hasTimeout
+        };
+    }
+
+    async forceCheckReminders() {
+        await this.checkNewReminders();
+    }
+
+    async getUpcomingReminders(minutes = 60) {
+        try {
+            const now = new Date();
+            const futureTime = new Date(now.getTime() + (minutes * 60 * 1000));
+            
+            const reminders = await this.db.getPendingRemindersInTimeframe(now, futureTime);
+            
+            return reminders.map(reminder => ({
+                id: reminder.id,
+                userId: reminder.user_id,
+                message: reminder.message,
+                timeUntil: new Date(reminder.reminder_time) - now,
+                hasTimeout: this.timeouts.has(reminder.id)
+            }));
+        } catch (error) {
+            return [];
+        }
     }
 }
 
-// create and return a new ReminderManager instance
 export default function createReminderManager(client, db) {
     const manager = new ReminderManager(client, db);
     return manager;

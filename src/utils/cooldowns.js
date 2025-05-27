@@ -5,6 +5,50 @@ const commandUsageTracker = new Map();
 const DEFAULT_GLOBAL_COOLDOWN = 20; // seconds for global commands
 const USAGE_WINDOW = 10000; // 10 seconds window for tracking command usage
 const USAGE_THRESHOLD = 5; // max number of unique users per window before increasing cooldowns
+const PERSIST_THRESHOLD = 120; // Only persist cooldowns longer than 2 minutes
+
+// Database reference (will be set during initialization)
+let db = null;
+
+// Initialize with database reference
+export function initializeCooldowns(database) {
+    db = database;
+    if (db) {
+        restoreLongCooldowns();
+    }
+}
+
+async function restoreLongCooldowns() {
+    try {
+        const longCooldowns = await db.getLongCooldowns();
+        console.log(`🕒 Restoring ${longCooldowns.length} long cooldowns`);
+        
+        for (const cooldown of longCooldowns) {
+            const key = getCooldownKey(cooldown.guild_id, cooldown.user_id, cooldown.command_name);
+            const expiresAt = new Date(cooldown.expires_at).getTime();
+            const now = Date.now();
+            
+            if (expiresAt <= now) {
+                // Already expired, clean up
+                await db.removeLongCooldown(cooldown.guild_id, cooldown.user_id, cooldown.command_name);
+                continue;
+            }
+            
+            // Restore cooldown
+            cooldowns.set(key, expiresAt);
+            
+            // Set cleanup timeout
+            setTimeout(() => {
+                cooldowns.delete(key);
+                if (db) {
+                    db.removeLongCooldown(cooldown.guild_id, cooldown.user_id, cooldown.command_name);
+                }
+            }, expiresAt - now);
+        }
+    } catch (error) {
+        console.error('Error restoring long cooldowns:', error);
+    }
+}
 
 function getCooldownKey(guildId, userId, commandName) {
     return `${guildId}-${userId}-${commandName}`;
@@ -59,7 +103,17 @@ export function addCooldown(guildId, userId, commandName, baseDuration) {
     const expirationTime = Date.now() + dynamicDuration * 1000;
     cooldowns.set(key, expirationTime);
 
-    setTimeout(() => cooldowns.delete(key), dynamicDuration * 1000);
+    // Only persist long cooldowns
+    if (dynamicDuration >= PERSIST_THRESHOLD && db) {
+        db.saveLongCooldown(guildId, userId, commandName, new Date(expirationTime));
+    }
+
+    setTimeout(() => {
+        cooldowns.delete(key);
+        if (dynamicDuration >= PERSIST_THRESHOLD && db) {
+            db.removeLongCooldown(guildId, userId, commandName);
+        }
+    }, dynamicDuration * 1000);
     
     return dynamicDuration;
 }
@@ -139,6 +193,12 @@ export function clearUserCooldowns(guildId, userId) {
                 commandUsageTracker.delete(key);
             }
         }
+    }
+    
+    // Clear from database
+    if (db) {
+        // Note: This would require a new database method if you want to clear all user cooldowns
+        // For now, they'll expire naturally
     }
 }
 

@@ -44,6 +44,86 @@ export async function generateModCode(prompt, includeExplanation = false) {
     return chatResult.choices[0].message.content;
 }
 
+export async function scanImageForNSFW(imageUrl) {
+    try {
+        const chatResult = await mistralClient.chat({
+            model: "pixtral-12b-2409",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Is this image NSFW? Reply: SAFE, NSFW, or UNCLEAR"
+                        },
+                        {
+                            type: "image_url",
+                            image_url: imageUrl
+                        }
+                    ]
+                }
+            ],
+            temperature: 0.1,
+            max_tokens: 10 // Limit response to save tokens
+        });
+
+        const response = chatResult.choices[0].message.content.trim().toUpperCase();
+        
+        // Validate response and default to UNCLEAR if unexpected
+        if (['SAFE', 'NSFW', 'UNCLEAR'].includes(response)) {
+            return response;
+        } else {
+            console.warn('Unexpected NSFW scan response:', response);
+            return 'UNCLEAR';
+        }
+    } catch (error) {
+        console.error('Error scanning image for NSFW content:', error);
+        return 'UNCLEAR'; // Default to unclear on error
+    }
+}
+
+export async function checkImageAgainstRules(imageUrl, serverRules) {
+    try {
+        const chatResult = await mistralClient.chat({
+            model: "pixtral-12b-2409",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: `Analyze this image against these server rules:
+
+${serverRules}
+
+Does this image violate any of the above rules? Consider:
+- Inappropriate content
+- Offensive imagery  
+- Rule-breaking behavior shown
+- Community guidelines
+
+Respond with either:
+- "No violations detected" if the image is acceptable
+- "Potential violation: [specific rule and reason]" if there are concerns`
+                        },
+                        {
+                            type: "image_url",
+                            image_url: imageUrl
+                        }
+                    ]
+                }
+            ],
+            temperature: 0.2,
+            max_tokens: 100
+        });
+
+        return chatResult.choices[0].message.content.trim();
+    } catch (error) {
+        console.error('Error checking image against rules:', error);
+        return 'Error analyzing image content';
+    }
+}
+
 export async function analyzeMessage(content) {
     const chatResult = await mistralClient.chat({
         model: "open-mistral-7b", 

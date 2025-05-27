@@ -12,7 +12,7 @@ import {
 } from 'discord.js';
 import db from '../../../../../database/index.js';
 import { logAction } from '../../../../../utils/logging.js';
-import { WELCOME_MESSAGES, FILTERED_TERMS } from '../../../../../config/constants.js';
+import { FILTERED_TERMS } from '../../../../../config/constants.js';
 import { loggingService } from '../../../../../utils/loggingService.js';
 
 export const command = {
@@ -63,19 +63,6 @@ export const command = {
             description: 'Channel for logging (forum channel for community servers, text channel for others)',
             required: false,
             channel_types: [ChannelType.GuildText, ChannelType.GuildForum]
-        },
-        {
-            name: 'welcome_channel',
-            type: ApplicationCommandOptionType.Channel,
-            description: 'Channel for welcome messages',
-            required: false,
-            channel_types: [ChannelType.GuildText]
-        },
-        {
-            name: 'welcome_enabled',
-            type: ApplicationCommandOptionType.Boolean,
-            description: 'Enable welcome messages',
-            required: false
         },
         {
             name: 'spam_protection',
@@ -242,7 +229,6 @@ export const command = {
     
             // Check channel permissions and types if channels are provided
             const logChannel = interaction.options.getChannel('log_channel');
-            const welcomeChannel = interaction.options.getChannel('welcome_channel');
             const ticketsChannel = interaction.options.getChannel('tickets_channel');
     
             if (logChannel) {
@@ -315,7 +301,7 @@ export const command = {
                 }
             }
 
-            const otherChannels = [welcomeChannel].filter(Boolean);
+            const otherChannels = [].filter(Boolean);
             for (const channel of otherChannels) {
                 const permissions = channel.permissionsFor(interaction.client.user);
                 if (!permissions.has(['ViewChannel', 'SendMessages'])) {
@@ -791,27 +777,7 @@ async function quickSetup(interaction) {
                     }
                 ]
             });
-        }
-
-        // Create welcome channel
-        const welcomeChannel = await interaction.guild.channels.create({
-            name: 'welcome',
-            type: ChannelType.GuildText,
-            permissionOverwrites: [
-                {
-                    id: interaction.guild.id,
-                    allow: ['ViewChannel'],
-                    deny: ['SendMessages']
-                },
-                {
-                    id: interaction.client.user.id,
-                    allow: ['ViewChannel', 'SendMessages']
-                }
-            ]
-        });
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const verifiedWelcomeChannel = await interaction.guild.channels.fetch(welcomeChannel.id);
+        };
 
         const settings = {
             guild_id: interaction.guildId,
@@ -819,12 +785,9 @@ async function quickSetup(interaction) {
             mod_role_id: modRole.id,
             log_channel_id: logChannel.id,
             reports_channel_id: reportsChannel?.id,
-            welcome_channel_id: verifiedWelcomeChannel.id,
             warning_threshold: warningThreshold,
             warning_expire_days: warningExpireDays,
             cooldown_seconds: cooldown,
-            welcome_enabled: true,
-            welcome_messages: JSON.stringify(WELCOME_MESSAGES),
             disabled_commands: '',
             spam_protection: spamProtection,
             spam_threshold: spamThreshold,
@@ -860,8 +823,6 @@ async function manualSetup(interaction) {
     const warningExpireDays = interaction.options.getInteger('warning_expire_days');
     const modRole = interaction.options.getRole('mod_role');
     const logChannel = interaction.options.getChannel('log_channel');
-    const welcomeChannel = interaction.options.getChannel('welcome_channel');
-    const welcomeEnabled = interaction.options.getBoolean('welcome_enabled');
     const spamProtection = interaction.options.getBoolean('spam_protection');
     const spamThreshold = interaction.options.getInteger('spam_threshold');
     const spamInterval = interaction.options.getInteger('spam_interval');
@@ -930,8 +891,6 @@ async function manualSetup(interaction) {
         if (cooldown !== null) settings.cooldown_seconds = cooldown;
         if (warningThreshold !== null) settings.warning_threshold = warningThreshold;
         if (warningExpireDays !== null) settings.warning_expire_days = warningExpireDays;
-        if (welcomeChannel) settings.welcome_channel_id = welcomeChannel.id;
-        if (welcomeEnabled !== null) settings.welcome_enabled = welcomeEnabled;
         if (spamProtection !== null) settings.spam_protection = spamProtection;
         if (spamThreshold !== null) settings.spam_threshold = spamThreshold;
         if (spamInterval !== null) settings.spam_interval = spamInterval * 1000;
@@ -941,10 +900,6 @@ async function manualSetup(interaction) {
         if (contentFilterMessage !== null) settings.content_filter_notify_message = contentFilterMessage;
         if (contentFilterSuspicious !== null) settings.content_filter_log_suspicious = contentFilterSuspicious;
         if (ticketsEnabled !== null) settings.tickets_enabled = ticketsEnabled;
-
-        if (welcomeEnabled && !settings.welcome_messages) {
-            settings.welcome_messages = JSON.stringify(WELCOME_MESSAGES);
-        }
 
         // Save settings
         await db.updateServerSettings(interaction.guildId, settings);
@@ -1017,15 +972,13 @@ async function createSetupSummaryEmbed(interaction, settings) {
             {
                 name: 'Channels',
                 value: `${settings.log_channel_id ? `Logs: <#${settings.log_channel_id}>` : 'No log channel set'}
-${settings.welcome_channel_id ? `Welcome: <#${settings.welcome_channel_id}>` : 'No welcome channel set'}
 ${settings.tickets_channel_id ? `Tickets: <#${settings.tickets_channel_id}>` : 'No tickets channel set'}
 ${settings.tickets_category_id ? `Tickets Category: <#${settings.tickets_category_id}>` : ''}`.trim(),
                 inline: true
             },
             {
                 name: 'Features',
-                value: `Welcome Messages: ${settings.welcome_enabled ? 'Enabled' : 'Disabled'}
-Spam Protection: ${settings.spam_protection ? 'Enabled' : 'Disabled'}
+                value: `Spam Protection: ${settings.spam_protection ? 'Enabled' : 'Disabled'}
 Command Cooldown: ${settings.cooldown_seconds}s
 Channel Restrictions: ${settings.channel_restrictions_enabled ? 'Enabled' : 'Disabled'}
 Content Filter: ${settings.content_filter_enabled ? 'Enabled' : 'Disabled'}

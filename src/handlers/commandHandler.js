@@ -5,7 +5,7 @@ import fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { hasPermission } from '../utils/permissions.js';
-import { checkCooldown, checkGlobalCooldown, addCooldown, addGlobalCooldown } from '../utils/cooldowns.js';
+import { checkCooldown, checkGlobalCooldown, addCooldown, addGlobalCooldown, initializeCooldowns } from '../utils/cooldowns.js';
 import { DEFAULT_SETTINGS } from '../config/constants.js';
 import db from '../database/index.js';
 import { loggingService } from '../utils/loggingService.js';
@@ -14,6 +14,38 @@ import { validateCommandOptions } from '../utils/validation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Global tracking for bot actions
+if (!global.botActionTracker) {
+    global.botActionTracker = new Map();
+}
+
+// Helper function to track any bot action
+function trackBotAction(type, guildId, userId, details = {}) {
+    const key = `${type}-${guildId}-${userId}`;
+    global.botActionTracker.set(key, {
+        time: Date.now(),
+        type: type,
+        details: details
+    });
+    
+    // Clean up after 10 seconds
+    setTimeout(() => {
+        global.botActionTracker.delete(key);
+    }, 10000);
+}
+
+// Helper function to check if an action was done by the bot
+function wasBotAction(type, guildId, userId) {
+    const key = `${type}-${guildId}-${userId}`;
+    const action = global.botActionTracker.get(key);
+    
+    if (action && Date.now() - action.time < 10000) {
+        global.botActionTracker.delete(key); // Remove after checking
+        return true;
+    }
+    return false;
+}
 
 async function ensureGuildSettings(guild) {
     if (!guild.settings) {
@@ -30,12 +62,42 @@ function formatCommandOptions(options) {
 
     return options.data.map(option => {
         let value = option.value;
-        // Sanitize string values
+        
+        // Handle subcommands and subcommand groups
+        if (option.type === 1 || option.type === 2) { // SUB_COMMAND or SUB_COMMAND_GROUP
+            if (option.options && option.options.length > 0) {
+                const subOptions = option.options.map(subOption => {
+                    let subValue = subOption.value;
+                    
+                    // Sanitize string values
+                    if (typeof subValue === 'string') {
+                        subValue = sanitizeInput(subValue);
+                    }
+                    
+                    // Handle special cases like mentions
+                    if (subOption.type === 6) { // USER type
+                        subValue = `<@${subOption.value}>`;
+                    } else if (subOption.type === 7) { // CHANNEL type
+                        subValue = `<#${subOption.value}>`;
+                    } else if (subOption.type === 8) { // ROLE type
+                        subValue = `<@&${subOption.value}>`;
+                    }
+                    
+                    return `${subOption.name}: ${subValue}`;
+                }).join(', ');
+                
+                return `${option.name}: ${subOptions}`;
+            } else {
+                return option.name; // Just the subcommand name if no options
+            }
+        }
+        
+        // Sanitize string values for regular options
         if (typeof value === 'string') {
             value = sanitizeInput(value);
         }
         
-        // Handle special cases like mentions
+        // Handle special cases like mentions for regular options
         if (option.type === 6) { // USER type
             value = `<@${option.value}>`;
         } else if (option.type === 7) { // CHANNEL type
@@ -54,6 +116,9 @@ export async function loadCommands(client) {
         console.error('DISCORD_TOKEN environment variable is not set!');
         process.exit(1);
     }
+
+    // Initialize cooldowns with database
+    initializeCooldowns(client.db);
 
     client.commands = new Collection();
     client.guildCommands = new Collection();
@@ -479,3 +544,6 @@ export async function handleCommand(interaction) {
         }
     }
 }
+
+// Export the tracking functions for use in other files
+export { trackBotAction, wasBotAction };

@@ -1,3 +1,5 @@
+import { EmbedBuilder } from 'discord.js';
+
 export const command = {
     name: 'serverinfo',
     description: 'Get information about the server',

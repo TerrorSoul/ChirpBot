@@ -3,8 +3,10 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { initHandlers } from './src/handlers/eventHandler.js';
-import db from './src/database/index.js';  // Import database
-import createReminderManager from './src/utils/reminderManager.js'; // Import reminder manager
+import db from './src/database/index.js';
+import createReminderManager from './src/utils/reminderManager.js';
+import createTimeoutManager from './src/utils/timeoutManager.js';
+import createCountdownManager from './src/utils/countdownManager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: join(__dirname, 'config', '.env') });
@@ -23,14 +25,12 @@ const client = new Client({
 // Attach database to client
 client.db = db;
 
-// Initialize and attach reminder manager
+// Initialize and attach all managers
 client.reminderManager = createReminderManager(client, db);
+client.timeoutManager = createTimeoutManager(client, db);
+client.countdownManager = createCountdownManager(client, db);
 
-// Initialize reminder manager when client is ready
-client.once('ready', async () => {
-    await client.reminderManager.initialize();
-    console.log('Reminder manager initialized');
-});
+// Initialize managers when client is ready (handled in eventHandler.js)
 
 initHandlers(client);
 
@@ -45,7 +45,18 @@ process.on('unhandledRejection', error => {
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
     console.log('Received SIGINT, shutting down...');
-    client.reminderManager.cleanup();
+    
+    // Cleanup all managers
+    if (client.reminderManager) {
+        client.reminderManager.cleanup();
+    }
+    if (client.timeoutManager) {
+        client.timeoutManager.cleanup();
+    }
+    if (client.countdownManager) {
+        client.countdownManager.cleanup();
+    }
+    
     if (db.shutdown) {
         await db.shutdown();
     }
@@ -54,7 +65,18 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
     console.log('Received SIGTERM, shutting down...');
-    client.reminderManager.cleanup();
+    
+    // Cleanup all managers
+    if (client.reminderManager) {
+        client.reminderManager.cleanup();
+    }
+    if (client.timeoutManager) {
+        client.timeoutManager.cleanup();
+    }
+    if (client.countdownManager) {
+        client.countdownManager.cleanup();
+    }
+    
     if (db.shutdown) {
         await db.shutdown();
     }

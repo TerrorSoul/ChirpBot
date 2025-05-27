@@ -38,7 +38,7 @@ export const command = {
 
         let warningMessage = '⚠️ **Warning**: This will reset all bot settings and data for this server.';
         if (deleteChannels) {
-            warningMessage += '\nThis will also delete channels created by the bot (logs, reports, welcome, tickets).';
+            warningMessage += '\nThis will also delete channels created by the bot (logs, reports, tickets).';
         }
         warningMessage += '\nAre you sure?';
 
@@ -105,7 +105,6 @@ export const command = {
                         const channelsToDelete = [
                             settings.log_channel_id,
                             settings.reports_channel_id,
-                            settings.welcome_channel_id,
                             ...ticketChannels.map(c => c.id)
                         ].filter(Boolean);
 

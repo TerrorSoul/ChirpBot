@@ -16,7 +16,8 @@ export const command = {
         );
 
         const filteredCommands = accessibleCommands.filter(cmd => 
-            (!cmd.type || cmd.type === ApplicationCommandType.ChatInput)
+            (!cmd.type || cmd.type === ApplicationCommandType.ChatInput) &&
+            !cmd.hidden
         );
 
         const helpEmbed = createHelpEmbed(filteredCommands);

@@ -96,7 +96,7 @@ export const command = {
                 });
             }
             
-            // store the reminder in the database
+            // Store the reminder in the database
             try {
                 const result = await interaction.client.db.createReminder(
                     interaction.user.id,
@@ -111,7 +111,7 @@ export const command = {
                 }
                 
                 await interaction.reply({ 
-                    content: `I'll remind you about "${message}" <t:${Math.floor(reminderTime.getTime() / 1000)}:R>`, 
+                    content: `✅ I'll remind you about "${message}" <t:${Math.floor(reminderTime.getTime() / 1000)}:R>`, 
                     ephemeral: true 
                 });
                 
@@ -123,57 +123,74 @@ export const command = {
                         guildId: interaction.guild.id,
                         channelId: interaction.channel.id,
                         message: message,
-                        reminderTime: reminderTime
+                        reminderTime: reminderTime,
+                        createdAt: new Date().toISOString() // Add this line - NEW
                     });
                 }
                 
             } catch (error) {
                 console.error('Error saving reminder:', error);
                 await interaction.reply({ 
-                    content: 'Failed to set reminder due to a database error.', 
+                    content: '❌ Failed to set reminder. Please try again later.', 
                     ephemeral: true 
                 });
             }
         }
         else if (subcommand === 'list') {
-            const reminders = await interaction.client.db.getUserReminders(interaction.user.id);
-            
-            if (reminders.length === 0) {
+            try {
+                const reminders = await interaction.client.db.getUserReminders(interaction.user.id);
+                
+                if (reminders.length === 0) {
+                    return interaction.reply({
+                        content: '📝 You have no active reminders.',
+                        ephemeral: true
+                    });
+                }
+                
+                const reminderList = reminders.map(reminder => {
+                    const time = new Date(reminder.reminder_time);
+                    return `**ID: ${reminder.id}** - "${reminder.message}" (<t:${Math.floor(time.getTime() / 1000)}:R>)`;
+                }).join('\n\n');
+                
                 return interaction.reply({
-                    content: 'You have no active reminders.',
+                    content: `📋 **Your Active Reminders:**\n\n${reminderList}\n\n💡 Use \`/reminder cancel id:<number>\` to cancel a reminder.`,
+                    ephemeral: true
+                });
+            } catch (error) {
+                console.error('Error fetching reminders:', error);
+                return interaction.reply({
+                    content: '❌ Failed to fetch your reminders. Please try again later.',
                     ephemeral: true
                 });
             }
-            
-            const reminderList = reminders.map(reminder => {
-                const time = new Date(reminder.reminder_time);
-                return `**ID: ${reminder.id}** - "${reminder.message}" (<t:${Math.floor(time.getTime() / 1000)}:R>)`;
-            }).join('\n\n');
-            
-            return interaction.reply({
-                content: `**Your Reminders:**\n\n${reminderList}\n\nUse \`/reminder cancel id:<number>\` to cancel a reminder.`,
-                ephemeral: true
-            });
         }
         else if (subcommand === 'cancel') {
             const id = interaction.options.getInteger('id');
             
-            // First try to cancel the timeout
-            if (interaction.client.reminderManager) {
-                await interaction.client.reminderManager.cancelReminder(id, interaction.user.id);
-            }
-            
-            // Then delete from database
-            const result = await interaction.client.db.deleteReminder(id, interaction.user.id);
-            
-            if (result.success) {
+            try {
+                // First try to delete from database (this validates ownership)
+                const result = await interaction.client.db.deleteReminder(id, interaction.user.id);
+                
+                if (result.success) {
+                    // Then cancel the timeout if it exists
+                    if (interaction.client.reminderManager) {
+                        await interaction.client.reminderManager.cancelReminder(id, interaction.user.id);
+                    }
+                    
+                    return interaction.reply({
+                        content: `✅ Reminder #${id} has been cancelled.`,
+                        ephemeral: true
+                    });
+                } else {
+                    return interaction.reply({
+                        content: `❌ Could not cancel reminder #${id}: ${result.reason || 'Not found or not yours'}`,
+                        ephemeral: true
+                    });
+                }
+            } catch (error) {
+                console.error('Error cancelling reminder:', error);
                 return interaction.reply({
-                    content: `✅ Reminder #${id} has been cancelled.`,
-                    ephemeral: true
-                });
-            } else {
-                return interaction.reply({
-                    content: `❌ Could not cancel reminder: ${result.reason || 'Not found or not yours'}`,
+                    content: '❌ Failed to cancel reminder. Please try again later.',
                     ephemeral: true
                 });
             }

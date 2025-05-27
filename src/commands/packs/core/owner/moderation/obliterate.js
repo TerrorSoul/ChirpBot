@@ -1,6 +1,11 @@
 import { ApplicationCommandOptionType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { loggingService } from '../../../../../utils/loggingService.js';
 
+// Initialize global tracking if it doesn't exist
+if (!global.purgeExecutors) {
+    global.purgeExecutors = new Map();
+}
+
 export const command = {
     name: 'obliterate',
     description: 'Completely remove a user from the server - deletes all their messages and bans them',
@@ -63,6 +68,20 @@ export const command = {
                     // Process each channel
                     for (const [_, channel] of channels) {
                         if (channel.isTextBased()) {
+                            // Track executor for each channel being processed
+                            const executorInfo = {
+                                id: interaction.user.id,
+                                tag: interaction.user.tag,
+                                reason: `Obliterate: ${reason}`,
+                                timestamp: Date.now(),
+                                targetUser: {
+                                    id: user.id,
+                                    tag: user.tag
+                                }
+                            };
+                            
+                            global.purgeExecutors.set(channel.id, executorInfo);
+                            
                             let lastId;
                             let messageCount = 0;
                             
@@ -108,20 +127,31 @@ export const command = {
                                 
                                 if (messages.size < 100) break;
                             }
+                            
+                            // Clean up executor tracking for this channel after a delay
+                            setTimeout(() => {
+                                if (global.purgeExecutors.has(channel.id)) {
+                                    global.purgeExecutors.delete(channel.id);
+                                }
+                            }, 30000);
                         }
                     }
 
                     // Ban the user
                     const memberToBan = await interaction.guild.members.fetch(user.id);
                     await memberToBan.ban({
-                        reason: `Obliterated: ${reason}`
+                        reason: `Obliterated by ${interaction.user.tag}: ${reason}`,
+                        deleteMessageDays: 7
                     });
 
-                    await loggingService.logEvent(interaction.guild, 'OBLITERATE', {
+                    await loggingService.logEvent(interaction.guild, 'BAN', {
                         userId: user.id,
+                        userTag: user.tag,
                         modTag: interaction.user.tag,
-                        reason: reason,
-                        messagesDeleted: totalDeleted
+                        reason: `Obliterated: ${reason}`,
+                        deleteMessageDays: 7,
+                        messagesDeleted: totalDeleted,
+                        channelId: interaction.channel.id
                     });
 
                     // Try to DM the user
@@ -138,7 +168,7 @@ export const command = {
                     }
 
                     await interaction.editReply({
-                        content: `✅ ${user.tag} has been obliterated from the server.\nTotal messages deleted: ${totalDeleted}`,
+                        content: `✅ ${user.tag} has been obliterated from the server.\n**Messages deleted:** ${totalDeleted}\n**Reason:** ${reason}`,
                         components: []
                     });
 
