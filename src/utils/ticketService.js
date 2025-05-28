@@ -5,6 +5,18 @@ import { loggingService } from '../utils/loggingService.js';
 import { sanitizeInput } from '../utils/sanitization.js';
 import { canSendDM } from '../utils/dmTracker.js';
 
+// Track active timeouts so we can clear them if needed
+const activeTicketTimeouts = new Map();
+
+// Function to clear all ticket timeouts (called during reset)
+export function clearTicketTimeouts() {
+    console.log(`Clearing ${activeTicketTimeouts.size} active ticket timeouts`);
+    for (const [ticketId, timeoutId] of activeTicketTimeouts.entries()) {
+        clearTimeout(timeoutId);
+        activeTicketTimeouts.delete(ticketId);
+    }
+}
+
 // Utility Functions
 async function verifyUserHistory(guild, userId) {
     try {
@@ -62,49 +74,17 @@ async function getOrCreateTicketSystem(guild) {
     const settings = await db.getServerSettings(guild.id);
     
     try {
-        // Try forum channel first for community servers
-        if (guild.features.includes('COMMUNITY')) {
-            let ticketChannel = guild.channels.cache.find(c => c.name === 'tickets' && c.type === ChannelType.GuildForum);
-            
-            if (!ticketChannel) {
-                ticketChannel = await guild.channels.create({
-                    name: 'tickets',
-                    type: ChannelType.GuildForum,
-                    permissionOverwrites: [
-                        {
-                            id: guild.id,
-                            deny: [PermissionFlagsBits.ViewChannel]
-                        },
-                        {
-                            id: settings.mod_role_id,
-                            allow: [
-                                PermissionFlagsBits.ViewChannel,
-                                PermissionFlagsBits.SendMessages,
-                                PermissionFlagsBits.ManageThreads
-                            ]
-                        },
-                        {
-                            id: guild.client.user.id,
-                            allow: [
-                                PermissionFlagsBits.ViewChannel,
-                                PermissionFlagsBits.SendMessages,
-                                PermissionFlagsBits.ManageThreads
-                            ]
-                        }
-                    ],
-                    reason: 'Ticket system channel'
-                });
-            }
-            
-            return { type: 'forum', channel: ticketChannel };
-        }
-
-        // For non-community servers, use category with individual channels
-        let ticketCategory = guild.channels.cache.find(c => c.name === 'Tickets' && c.type === ChannelType.GuildCategory);
+        // First, try to find ChirpBot category
+        let ticketCategory = guild.channels.cache.find(c => 
+            c.type === ChannelType.GuildCategory && c.name === 'ChirpBot'
+        );
         
+        // If ChirpBot category doesn't exist, create it
         if (!ticketCategory) {
-            ticketCategory = await guild.channels.create({
-                name: 'Tickets',
+            console.log('ChirpBot category not found, creating it for tickets...');
+            
+            const categoryOptions = {
+                name: 'ChirpBot',
                 type: ChannelType.GuildCategory,
                 permissionOverwrites: [
                     {
@@ -112,27 +92,89 @@ async function getOrCreateTicketSystem(guild) {
                         deny: [PermissionFlagsBits.ViewChannel]
                     },
                     {
-                        id: settings.mod_role_id,
-                        allow: [
-                            PermissionFlagsBits.ViewChannel,
-                            PermissionFlagsBits.SendMessages,
-                            PermissionFlagsBits.ManageMessages
-                        ]
-                    },
-                    {
                         id: guild.client.user.id,
                         allow: [
                             PermissionFlagsBits.ViewChannel,
                             PermissionFlagsBits.SendMessages,
-                            PermissionFlagsBits.ManageMessages
+                            PermissionFlagsBits.EmbedLinks,
+                            PermissionFlagsBits.ReadMessageHistory,
+                            PermissionFlagsBits.ManageChannels,
+                            PermissionFlagsBits.ManageThreads,
+                            PermissionFlagsBits.CreatePublicThreads
                         ]
                     }
                 ],
-                reason: 'Ticket system category'
-            });
+                reason: 'Ticket system - ChirpBot category'
+            };
+
+            if (settings.mod_role_id) {
+                categoryOptions.permissionOverwrites.push({
+                    id: settings.mod_role_id,
+                    allow: [
+                        PermissionFlagsBits.ViewChannel,
+                        PermissionFlagsBits.SendMessages,
+                        PermissionFlagsBits.ManageChannels,
+                        PermissionFlagsBits.ManageThreads
+                    ]
+                });
+            }
+
+            ticketCategory = await guild.channels.create(categoryOptions);
         }
 
-        return { type: 'category', channel: ticketCategory };
+        // For community servers, try forum channel first
+        if (guild.features.includes('COMMUNITY')) {
+            let ticketChannel = guild.channels.cache.find(c => 
+                c.name === 'tickets' && 
+                c.type === ChannelType.GuildForum &&
+                c.parentId === ticketCategory.id
+            );
+            
+            if (!ticketChannel) {
+                console.log('Creating tickets forum channel under ChirpBot category...');
+                
+                const forumOptions = {
+                    name: 'tickets',
+                    type: ChannelType.GuildForum,
+                    parent: ticketCategory,
+                    permissionOverwrites: [
+                        {
+                            id: guild.id,
+                            deny: [PermissionFlagsBits.ViewChannel]
+                        },
+                        {
+                            id: guild.client.user.id,
+                            allow: [
+                                PermissionFlagsBits.ViewChannel,
+                                PermissionFlagsBits.SendMessages,
+                                PermissionFlagsBits.ManageThreads,
+                                PermissionFlagsBits.CreatePublicThreads
+                            ]
+                        }
+                    ],
+                    reason: 'Ticket system forum channel'
+                };
+
+                if (settings.mod_role_id) {
+                    forumOptions.permissionOverwrites.push({
+                        id: settings.mod_role_id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ManageThreads
+                        ]
+                    });
+                }
+
+                ticketChannel = await guild.channels.create(forumOptions);
+            }
+            
+            return { type: 'forum', channel: ticketChannel, category: ticketCategory };
+        }
+
+        // For non-community servers, we'll create individual channels under ChirpBot category
+        return { type: 'category', channel: ticketCategory, category: ticketCategory };
+        
     } catch (error) {
         if (error.code === 50013) {
             console.error('Missing permissions to create ticket system:', error.message);
@@ -204,40 +246,51 @@ export async function handleTicketCreate(interaction) {
         const ticketSystem = await getOrCreateTicketSystem(guild);
         const settings = await db.getServerSettings(guild.id);
 
+        // Create ticket in database first to get the ID
+        const ticketResult = await db.createTicket(
+            guild.id, 
+            interaction.user.id, 
+            ticketSystem.channel.id,
+            null // We'll update this with the actual channel/thread ID
+        );
+
+        const ticketId = ticketResult.lastID;
+
         if (ticketSystem.type === 'forum') {
+            // Create thread in forum with ticket ID and username
+            const threadName = `ticket-${ticketId}-${interaction.user.username}`;
+            
             const thread = await ticketSystem.channel.threads.create({
-                name: `Ticket-${interaction.user.tag}`,
+                name: threadName,
                 message: { embeds: [embed] },
                 autoArchiveDuration: ThreadAutoArchiveDuration.ThreeDays,
-                reason: `Ticket from ${interaction.user.tag}`
+                reason: `Ticket #${ticketId} from ${interaction.user.tag}`
             });
 
-            const ticket = await db.createTicket(
-                guild.id, 
-                interaction.user.id, 
-                ticketSystem.channel.id,
-                thread.id
-            );
+            // Update the ticket with thread ID
+            await db.updateTicket(ticketId, { thread_id: thread.id });
 
-            await db.addTicketMessage(ticket.lastID, interaction.user.id, message);
+            await db.addTicketMessage(ticketId, interaction.user.id, message);
 
             await loggingService.logEvent(guild, 'TICKET_CREATED', {
                 userId: interaction.user.id,
                 userTag: interaction.user.tag,
-                ticketId: ticket.lastID,
+                ticketId: ticketId,
                 content: message
             });
 
-            await thread.setName(`ticket-${ticket.lastID}`);
             await interaction.editReply({
-                content: `Ticket #${ticket.lastID} created successfully. I'll notify you here when you receive a response.`
+                content: `Ticket #${ticketId} created successfully in ${thread.toString()}. I'll notify you here when you receive a response.`
             });
 
         } else {
+            // Create individual channel under ChirpBot category
+            const channelName = `ticket-${ticketId}-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+            
             const ticketChannel = await guild.channels.create({
-                name: `ticket-${Date.now().toString(36)}`,
+                name: channelName,
                 type: ChannelType.GuildText,
-                parent: ticketSystem.channel.id,
+                parent: ticketSystem.category,
                 permissionOverwrites: [
                     {
                         id: guild.id,
@@ -265,15 +318,11 @@ export async function handleTicketCreate(interaction) {
                         ]
                     }
                 ],
-                reason: `Ticket from ${interaction.user.tag}`
+                reason: `Ticket #${ticketId} from ${interaction.user.tag}`
             });
 
-            const ticket = await db.createTicket(
-                guild.id, 
-                interaction.user.id, 
-                ticketChannel.id,
-                null
-            );
+            // Update the ticket with channel ID
+            await db.updateTicket(ticketId, { channel_id: ticketChannel.id });
 
             const channelEmbed = new EmbedBuilder()
                 .setColor(0x0099FF)
@@ -281,24 +330,23 @@ export async function handleTicketCreate(interaction) {
                     name: interaction.user.tag,
                     iconURL: interaction.user.displayAvatarURL()
                 })
-                .setTitle(`Ticket #${ticket.lastID}`)
+                .setTitle(`Ticket #${ticketId}`)
                 .setDescription(message)
                 .setTimestamp()
                 .setFooter({ text: `User ID: ${interaction.user.id}` });
 
             await ticketChannel.send({ embeds: [channelEmbed] });
-            await ticketChannel.setName(`ticket-${ticket.lastID}`);
-            await db.addTicketMessage(ticket.lastID, interaction.user.id, message);
+            await db.addTicketMessage(ticketId, interaction.user.id, message);
 
             await loggingService.logEvent(guild, 'TICKET_CREATED', {
                 userId: interaction.user.id,
                 userTag: interaction.user.tag,
-                ticketId: ticket.lastID,
+                ticketId: ticketId,
                 content: message
             });
 
             await interaction.editReply({
-                content: `Ticket #${ticket.lastID} created successfully. I'll notify you here when you receive a response.`
+                content: `Ticket #${ticketId} created successfully in ${ticketChannel.toString()}. I'll notify you here when you receive a response.`
             });
         }
     } catch (error) {
@@ -350,7 +398,7 @@ export async function handleTicketReply(interaction, message = null) {
             // Send reply to ticket channel/thread
             const guild = interaction.client.guilds.cache.get(ticket.guild_id);
             
-            // Fixed section - properly handle thread vs channel tickets
+            // Handle thread vs channel tickets
             if (ticket.thread_id) {
                 // For forum-based tickets with threads
                 const forumChannel = await guild.channels.fetch(ticket.channel_id);
@@ -396,7 +444,7 @@ export async function handleTicketReply(interaction, message = null) {
             });
 
             const ticket = await db.getTicket(message.channel.id);
-            console.log('Found ticket:', ticket);
+            //console.log('Found ticket:', ticket);
 
             if (!ticket) {
                 console.log('No ticket found for channel:', message.channel.id);
@@ -562,8 +610,15 @@ export async function handleModTicketClose(interaction) {
         });
     }
 
-    if (!interaction.channel?.isThread() && 
-        interaction.channel.parent?.name !== 'Tickets') {
+    // Check if we're in a ticket channel (either thread or channel under ChirpBot category)
+    const isTicketThread = interaction.channel?.isThread() && 
+        interaction.channel.parent?.name === 'tickets' &&
+        interaction.channel.parent?.parent?.name === 'ChirpBot';
+        
+    const isTicketChannel = interaction.channel.parent?.name === 'ChirpBot' &&
+        interaction.channel.name.startsWith('ticket-');
+
+    if (!isTicketThread && !isTicketChannel) {
         return interaction.reply({
             content: "This command can only be used in ticket channels.",
             ephemeral: true
@@ -685,45 +740,58 @@ export async function closeTicket(ticket, userId, reason, client) {
             .setDescription(`Reason: ${sanitizedReason}`)
             .setTimestamp();
 
-        // Handle thread vs channel differently
         if (ticket.thread_id) {
             const forumChannel = await guild.channels.fetch(ticket.channel_id);
             const thread = await forumChannel.threads.fetch(ticket.thread_id);
-            
+
             await thread.send({ embeds: [closeEmbed] });
-            
-            // Lock thread immediately
             await thread.setLocked(true);
-            
-            // Give users a moment to read the closure message, then delete
-            setTimeout(async () => {
+
+            // Tracked timeout for thread deletion
+            const timeoutId = setTimeout(async () => {
                 try {
+                    await thread.fetch(); // Ensure thread still exists
                     await thread.delete();
                 } catch (error) {
-                    console.error('Error deleting ticket thread:', {
-                        error: error.message,
-                        threadId: thread.id
-                    });
-                    // Fall back to archiving if deletion fails
-                    await thread.setArchived(true);
-                }
-            }, 1 * 60 * 1000); // 1 minute delay
-        } else {
-            const channel = await guild.channels.fetch(ticket.channel_id);
-            
-            await channel.send({ embeds: [closeEmbed] });
-            
-            // Give 1 minute to read the close message before deleting
-            setTimeout(async () => {
-                try {
-                    await channel.delete();
-                } catch (error) {
-                    console.error('Error deleting ticket channel:', {
-                        error: error.message,
-                        channelId: channel.id
-                    });
+                    if (error.code === 10003) {
+                        console.log(`Ticket thread ${ticket.id} already deleted`);
+                    } else {
+                        console.error('Error deleting ticket thread:', error);
+                        // Fall back to archiving if deletion fails
+                        try {
+                            await thread.setArchived(true);
+                        } catch (archiveError) {
+                            console.error('Failed to archive thread:', archiveError);
+                        }
+                    }
+                } finally {
+                    activeTicketTimeouts.delete(ticket.id);
                 }
             }, 1 * 60 * 1000);
+
+            activeTicketTimeouts.set(ticket.id, timeoutId);
+        } else {
+            const channel = await guild.channels.fetch(ticket.channel_id);
+
+            await channel.send({ embeds: [closeEmbed] });
+
+            // Tracked timeout for channel deletion
+            const timeoutId = setTimeout(async () => {
+                try {
+                    await channel.fetch(); // Ensure channel still exists
+                    await channel.delete();
+                } catch (error) {
+                    if (error.code === 10003) {
+                        console.log(`Ticket channel ${ticket.id} already deleted`);
+                    } else {
+                        console.error('Error deleting ticket channel:', error);
+                    }
+                } finally {
+                    activeTicketTimeouts.delete(ticket.id);
+                }
+            }, 1 * 60 * 1000);
+
+            activeTicketTimeouts.set(ticket.id, timeoutId);
         }
 
         // Notify user via DM
@@ -735,7 +803,6 @@ export async function closeTicket(ticket, userId, reason, client) {
                 .setDescription(sanitizedReason)
                 .setTimestamp();
 
-            // Add DM rate limiting
             if (await canSendDM(user.id)) {
                 await user.send({ embeds: [userEmbed] });
             }
@@ -767,17 +834,19 @@ export async function closeTicket(ticket, userId, reason, client) {
 }
 
 export async function handleModeratorReply(message) {
-    // Check for both lowercase and uppercase "Tickets" categories
+    // Check for ticket channels under ChirpBot category
     if (message.channel.isThread() && 
-        message.channel.parent?.name.toLowerCase() === 'tickets') {
-        console.log('Processing ticket reply in thread');
+        message.channel.parent?.name === 'tickets' &&
+        message.channel.parent?.parent?.name === 'ChirpBot') {
+        console.log('Processing ticket reply in forum thread under ChirpBot');
         await handleTicketReply(null, message);
         return;
     }
     
     if (message.channel.type === ChannelType.GuildText && 
-        (message.channel.parent?.name === 'Tickets' || message.channel.parent?.name === 'tickets')) {
-        console.log('Processing ticket reply in channel');
+        message.channel.parent?.name === 'ChirpBot' &&
+        message.channel.name.startsWith('ticket-')) {
+        console.log('Processing ticket reply in channel under ChirpBot');
         await handleTicketReply(null, message);
         return;
     }
@@ -832,63 +901,63 @@ export async function handleTicketWipe(interaction) {
                         await thread.setLocked(true);
                         await thread.delete().catch(error => {
                             console.error('Error deleting ticket thread during wipe:', {
-                                error: error.message,
-                                threadId: thread.id,
-                                ticketId: ticket.id
-                            });
-                        });
-                    }
-                }
-            } else {
-                const channel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
-                if (channel) {
-                    await channel.delete().catch(error => {
-                        console.error('Error deleting ticket channel during wipe:', {
-                            error: error.message,
-                            channelId: channel.id,
-                            ticketId: ticket.id
-                        });
-                    });
-                }
-            }
-        }
+                               error: error.message,
+                               threadId: thread.id,
+                               ticketId: ticket.id
+                           });
+                       });
+                   }
+               }
+           } else {
+               const channel = await interaction.guild.channels.fetch(ticket.channel_id).catch(() => null);
+               if (channel) {
+                   await channel.delete().catch(error => {
+                       console.error('Error deleting ticket channel during wipe:', {
+                           error: error.message,
+                           channelId: channel.id,
+                           ticketId: ticket.id
+                       });
+                   });
+               }
+           }
+       }
 
-        // Update database
-        await db.wipeUserTickets(interaction.guildId, user.id);
+       // Update database
+       await db.wipeUserTickets(interaction.guildId, user.id);
 
-        // Log the action
-        await loggingService.logEvent(interaction.guild, 'TICKETS_WIPED', {
-            userId: user.id,
-            userTag: user.tag,
-            modId: interaction.user.id,
-            modTag: interaction.user.tag,
-            ticketCount: tickets.length,
-            reason: reason
-        });
+       // Log the action
+       await loggingService.logEvent(interaction.guild, 'TICKETS_WIPED', {
+           userId: user.id,
+           userTag: user.tag,
+           modId: interaction.user.id,
+           modTag: interaction.user.tag,
+           ticketCount: tickets.length,
+           reason: reason
+       });
 
-        await interaction.editReply({
-            content: `Successfully wiped ${tickets.length} ticket(s) from ${user.tag}.\nReason: ${reason}`,
-            ephemeral: true
-        });
+       await interaction.editReply({
+           content: `Successfully wiped ${tickets.length} ticket(s) from ${user.tag}.\nReason: ${reason}`,
+           ephemeral: true
+       });
 
-    } catch (error) {
-        console.error('Error wiping tickets:', {
-            error: error.message,
-            stack: error.stack,
-            guildId: interaction.guildId,
-            userId: interaction.options.getUser('user')?.id
-        });
-        const response = interaction.deferred ? 
-            interaction.editReply : interaction.reply;
-        await response.call(interaction, {
-            content: "An error occurred while wiping tickets.",
-            ephemeral: true
-        });
-    }
+   } catch (error) {
+       console.error('Error wiping tickets:', {
+           error: error.message,
+           stack: error.stack,
+           guildId: interaction.guildId,
+           userId: interaction.options.getUser('user')?.id
+       });
+       const response = interaction.deferred ? 
+           interaction.editReply : interaction.reply;
+       await response.call(interaction, {
+           content: "An error occurred while wiping tickets.",
+           ephemeral: true
+       });
+   }
 }
 
 // Export all functions that need to be accessible from other files
 export {
-    verifyUserHistory,
-    getOrCreateTicketSystem
+   verifyUserHistory,
+   getOrCreateTicketSystem
 };

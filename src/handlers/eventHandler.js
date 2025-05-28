@@ -96,6 +96,293 @@ async function updateUserThreadTags(guild, userId, userTag = null) {
     }
 }
 
+async function analyzeServerSetup(guild) {
+    const botMember = guild.members.me;
+    const analysis = {
+        rolePosition: 'unknown',
+        roleIssues: [],
+        permissions: {
+            missing: [],
+            hasAll: false
+        },
+        serverType: 'unknown',
+        memberCount: guild.memberCount,
+        features: guild.features,
+        recommendations: []
+    };
+
+    try {
+        // Analyze role position
+        const botRole = botMember.roles.highest;
+        const totalRoles = guild.roles.cache.size;
+        const botPosition = botRole.position;
+        const rolesAbove = guild.roles.cache.filter(r => 
+            r.position > botPosition && 
+            !r.managed && 
+            r.id !== guild.id
+        ).size;
+
+        analysis.rolePosition = {
+            current: botPosition,
+            total: totalRoles,
+            rolesAbove: rolesAbove,
+            severity: rolesAbove > 5 ? 'high' : rolesAbove > 2 ? 'medium' : 'low'
+        };
+
+        // Check critical permissions
+        const requiredPerms = [
+            'ManageRoles', 'ManageChannels', 'ViewAuditLog', 
+            'ManageMessages', 'ModerateMembers', 'KickMembers', 'BanMembers'
+        ];
+        
+        const missingPerms = requiredPerms.filter(perm => !botMember.permissions.has(perm));
+        analysis.permissions = {
+            missing: missingPerms,
+            hasAll: missingPerms.length === 0
+        };
+
+        // Determine server type and complexity
+        const isCommunity = guild.features.includes('COMMUNITY');
+        const isLarge = guild.memberCount > 100;
+        const hasBoostLevel = guild.premiumTier > 0;
+        
+        analysis.serverType = {
+            isCommunity,
+            isLarge,
+            hasBoostLevel,
+            complexity: isCommunity || isLarge ? 'complex' : 'simple'
+        };
+
+        // Generate specific recommendations
+        if (analysis.rolePosition.severity !== 'low') {
+            analysis.recommendations.push({
+                type: 'critical',
+                title: 'Fix Role Position',
+                description: `Move my role higher in Server Settings → Roles. Currently ${rolesAbove} roles are above mine, which may prevent moderation commands from working.`,
+                priority: 1
+            });
+        }
+
+        if (!analysis.permissions.hasAll) {
+            analysis.recommendations.push({
+                type: 'critical',
+                title: 'Grant Missing Permissions',
+                description: `I'm missing these permissions: ${missingPerms.join(', ')}. Please update my role permissions.`,
+                priority: 1
+            });
+        }
+
+        if (analysis.serverType.complexity === 'complex') {
+            analysis.recommendations.push({
+                type: 'setup',
+                title: 'Use Quick Setup',
+                description: 'For complex servers like yours, I recommend using Quick Setup to automatically configure everything properly.',
+                priority: 2
+            });
+        }
+
+        // Check for existing bot channels that might conflict
+        const existingBotChannels = guild.channels.cache.filter(c => 
+            ['logs', 'log', 'mod-log', 'audit', 'reports', 'tickets'].some(name => 
+                c.name.toLowerCase().includes(name)
+            )
+        );
+
+        if (existingBotChannels.size > 0) {
+            analysis.recommendations.push({
+                type: 'info',
+                title: 'Existing Channels Detected',
+                description: `I found ${existingBotChannels.size} existing channels that might be used for logging/moderation. Setup can use these or create new ones.`,
+                priority: 3
+            });
+        }
+
+    } catch (error) {
+        console.error('Error analyzing server setup:', error);
+    }
+
+    return analysis;
+}
+
+function createOnboardingEmbed(guild, analysis) {
+    const embed = new EmbedBuilder()
+        .setTitle('🎉 Thanks for adding ChirpBot!')
+        .setColor(analysis.permissions.hasAll && analysis.rolePosition.severity === 'low' ? '#00FF00' : '#FFA500')
+        .setDescription(`Thanks for adding me to **${guild.name}**! I'm here to help with moderation and server management.`)
+        .setThumbnail(guild.client.user.displayAvatarURL())
+        .addFields({
+            name: '🚀 Quick Start',
+            value: 'Run `/setup` to get started with automatic configuration, or continue reading for a detailed setup guide.',
+            inline: false
+        });
+
+    // Add critical issues first
+    const criticalIssues = analysis.recommendations.filter(r => r.type === 'critical');
+    if (criticalIssues.length > 0) {
+        embed.addFields({
+            name: '⚠️ **IMPORTANT: Setup Issues Detected**',
+            value: criticalIssues.map((issue, i) => 
+                `**${i + 1}.** ${issue.title}\n${issue.description}`
+            ).join('\n\n'),
+            inline: false
+        });
+
+        // Add visual role hierarchy helper
+        if (analysis.rolePosition.severity !== 'low') {
+            embed.addFields({
+                name: '📊 Role Position Status',
+                value: `\`\`\`
+Current Position: ${analysis.rolePosition.current}/${analysis.rolePosition.total}
+Roles Above Me: ${analysis.rolePosition.rolesAbove}
+Status: ${analysis.rolePosition.severity.toUpperCase()} PRIORITY
+
+${analysis.rolePosition.severity === 'high' ? '❌ Many roles above - moderation may fail' : 
+  analysis.rolePosition.severity === 'medium' ? '⚠️ Some roles above - partial functionality' : 
+  '✅ Good position - full functionality'}
+\`\`\``,
+                inline: false
+            });
+        }
+    }
+
+    // Add setup recommendations
+    const setupPath = analysis.serverType.complexity === 'complex' ? 'Quick Setup (Recommended)' : 'Setup Options';
+    embed.addFields({
+        name: `⚙️ ${setupPath}`,
+        value: analysis.serverType.complexity === 'complex' ? 
+            '**For your server type, I recommend Quick Setup:**\n' +
+            '• Automatically creates organized channels under "ChirpBot" category\n' +
+            '• Sets up proper permissions and roles\n' +
+            '• Enables recommended features for community servers\n' +
+            '• Just run `/setup` and click "Quick Setup"' :
+            '**Setup Options:**\n' +
+            '• **Quick Setup**: Automatic configuration (recommended)\n' +
+            '• **Manual Setup**: Use `/setup` with specific options\n' +
+            '• **Custom**: Configure individual settings as needed',
+        inline: false
+    });
+
+    // Add server-specific recommendations
+    const serverSpecificTips = [];
+    
+    if (analysis.serverType.isCommunity) {
+        serverSpecificTips.push('🏘️ **Community Server**: I\'ll use forum channels for better organization');
+    }
+    
+    if (analysis.serverType.isLarge) {
+        serverSpecificTips.push('👥 **Large Server**: Consider enabling content filtering and channel restrictions');
+    }
+    
+    if (analysis.serverType.hasBoostLevel) {
+        serverSpecificTips.push('💎 **Boosted Server**: You have access to enhanced features like better forum channels');
+    }
+
+    if (serverSpecificTips.length > 0) {
+        embed.addFields({
+            name: '💡 Server-Specific Tips',
+            value: serverSpecificTips.join('\n'),
+            inline: false
+        });
+    }
+
+    // Add feature overview
+    embed.addFields({
+        name: '🛠️ What I Can Do',
+        value: '• **Moderation**: Warnings, timeouts, bans with logging\n' +
+               '• **Content Filtering**: Automatic spam and inappropriate content detection\n' +
+               '• **Ticket System**: Support ticket management\n' +
+               '• **Role Management**: Automated role assignments\n' +
+               '• **Backup System**: Server configuration backups\n' +
+               '• **Channel Organization**: All bot channels under "ChirpBot" category',
+        inline: false
+    });
+
+    // Add next steps
+    const nextSteps = [];
+    
+    if (criticalIssues.length > 0) {
+        nextSteps.push('1. **Fix the issues above** (critical for proper functioning)');
+        nextSteps.push('2. Run `/setup` once issues are resolved');
+    } else {
+        nextSteps.push('1. Run `/setup` to begin configuration');
+    }
+    
+    nextSteps.push('2. Use `/help` to see all available commands');
+    nextSteps.push('3. Create a backup with `/backup` after setup');
+    
+    if (analysis.serverType.complexity === 'complex') {
+        nextSteps.push('4. Consider using `/manageperms` to restrict commands to specific channels');
+    }
+
+    embed.addFields({
+        name: '📋 Next Steps',
+        value: nextSteps.join('\n'),
+        inline: false
+    });
+
+    // footer with helpful info
+    embed.setFooter({ 
+        text: `Added to ${guild.memberCount} member server • Use /setup to get started`,
+        iconURL: guild.iconURL() 
+    });
+
+    return embed;
+}
+
+async function findBestContactPerson(guild) {
+    try {
+        // Priority order: person who invited the bot, then owner, then admins
+        
+        // Try to find who invited the bot from audit logs
+        const auditLogs = await guild.fetchAuditLogs({
+            type: 28, // Bot Add
+            limit: 5
+        }).catch(() => null);
+        
+        if (auditLogs) {
+            const botAddEntry = auditLogs.entries.find(entry => 
+                entry.target?.id === guild.client.user.id &&
+                (Date.now() - entry.createdTimestamp) < 300000 // Within last 5 minutes
+            );
+            
+            if (botAddEntry?.executor && !botAddEntry.executor.bot) {
+                return botAddEntry.executor;
+            }
+        }
+        
+        // Fall back to guild owner
+        return await guild.fetchOwner().catch(() => null);
+        
+    } catch (error) {
+        console.error('Error finding best contact person:', error);
+        return null;
+    }
+}
+
+function findBestChannel(guild) {
+    // Priority order for posting the onboarding message
+    const channelPriorities = [
+        'general', 'welcome', 'announcements', 'bot-commands', 
+        'commands', 'admin', 'staff', 'moderator'
+    ];
+    
+    for (const channelName of channelPriorities) {
+        const channel = guild.channels.cache.find(c => 
+            c.type === ChannelType.GuildText && 
+            c.name.toLowerCase().includes(channelName) &&
+            c.permissionsFor(guild.members.me)?.has(['SendMessages', 'ViewChannel', 'EmbedLinks'])
+        );
+        
+        if (channel) return channel;
+    }
+    
+    // Fallback to any text channel where bot can post
+    return guild.channels.cache.find(c => 
+        c.type === ChannelType.GuildText && 
+        c.permissionsFor(guild.members.me)?.has(['SendMessages', 'ViewChannel', 'EmbedLinks'])
+    );
+}
+
 async function downloadAndSaveImage(attachment, userId, messageId) {
     try {
         // Validate attachment
@@ -1416,16 +1703,18 @@ export async function initHandlers(client) {
       try {
           if (!message.author.bot) {
               // Check for ticket replies
-              if (message.channel.isThread() && 
-                  message.channel.parent?.name.toLowerCase() === 'tickets') {
-                  await handleTicketReply(null, message);
-                  return;
-              }
-              if (message.channel.type === ChannelType.GuildText && 
-                  message.channel.parent?.name === 'Tickets') {
-                  await handleTicketReply(null, message);
-                  return;
-              }
+                if (message.channel.isThread() && 
+                    message.channel.parent?.name === 'tickets' &&
+                    message.channel.parent?.parent?.name === 'ChirpBot') {
+                    await handleTicketReply(null, message);
+                    return;
+                }
+                if (message.channel.type === ChannelType.GuildText && 
+                    message.channel.parent?.name === 'ChirpBot' &&
+                    message.channel.name.startsWith('ticket-')) {
+                    await handleTicketReply(null, message);
+                    return;
+                }
               
               // Add time-based role check for active members
               if (message.guild && message.member) {
@@ -1586,66 +1875,62 @@ export async function initHandlers(client) {
   });
 
   client.on('guildCreate', async (guild) => {
-      console.log(`Joined new guild: ${guild.name}`);
-      try {
-          // Verify token is set
-          if (!process.env.DISCORD_TOKEN) {
-              console.error('DISCORD_TOKEN environment variable is not set!');
-              process.exit(1);
-          }
-          
-          const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-          const coreCommands = Array.from(client.guildCommands.values())
-              .filter(cmd => cmd.pack === 'core');  
-          console.log(`Registering ${coreCommands.length} core commands for new guild: ${guild.name}`);
-          await rest.put(
-              Routes.applicationGuildCommands(client.user.id, guild.id),
-              { body: coreCommands }
-          );
-          const inviter = await guild.fetchAuditLogs({
-              type: 28,
-              limit: 1
-          }).then(audit => audit.entries.first()?.executor);
-          const embed = new EmbedBuilder()
-              .setTitle('Thanks for adding me!')
-              .setColor('#00FF00')
-              .setDescription(`To get started, please have the server owner run \`/setup\` in **${guild.name}**. This will enable all bot features and commands.`)
-              .addFields({
-                  name: 'Next Steps',
-                  value: '1. Run `/setup`\n2. Choose quick or manual setup\n3. Select desired command packs\n4. Configure server settings'
-              });
-          if (inviter) {
-              try {
-                  if (await canSendDM(inviter.id)) {
-                      await inviter.send({ embeds: [embed] });
-                      return;
-                  } else {
-                      console.log('DM rate limit reached for inviter, falling back to channel message');
-                  }
-              } catch (error) {
-                  console.log('Could not DM inviter, falling back to channel message');
-              }
-          }
-          const channel = guild.channels.cache
-              .find(channel => 
-                  channel.type === ChannelType.GuildText && 
-                  channel.permissionsFor(guild.members.me).has(['SendMessages', 'ViewChannel'])
-              );
-          if (channel) {
-              await channel.send({ embeds: [embed] });
-          }
-      } catch (error) {
-          if (error.code === 50013) {
-              console.error('Missing permissions in new guild:', error.message);
-          } else {
-              console.error('Error setting up new guild:', {
-                  error: error.message,
-                  guildId: guild.id,
-                  guildName: guild.name
-              });
-          }
-      }
-  });
+    console.log(`Joined new guild: ${guild.name}`);
+    
+    try {
+        // Verify token is set
+        if (!process.env.DISCORD_TOKEN) {
+            console.error('DISCORD_TOKEN environment variable is not set!');
+            process.exit(1);
+        }
+        
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        const coreCommands = Array.from(client.guildCommands.values())
+            .filter(cmd => cmd.pack === 'core');  
+        
+        console.log(`Registering ${coreCommands.length} core commands for new guild: ${guild.name}`);
+        await rest.put(
+            Routes.applicationGuildCommands(client.user.id, guild.id),
+            { body: coreCommands }
+        );
+
+        // Analyze server setup and create comprehensive onboarding
+        const onboardingInfo = await analyzeServerSetup(guild);
+        const embed = createOnboardingEmbed(guild, onboardingInfo);
+
+        // Try to find the best person to message
+        const targetUser = await findBestContactPerson(guild);
+        
+        if (targetUser) {
+            try {
+                if (await canSendDM(targetUser.id)) {
+                    await targetUser.send({ embeds: [embed] });
+                    console.log(`Sent onboarding DM to ${targetUser.tag}`);
+                    return;
+                } else {
+                    console.log('DM rate limit reached, falling back to channel message');
+                }
+            } catch (dmError) {
+                console.log(`Could not DM ${targetUser.tag}, falling back to channel message`);
+            }
+        }
+
+        // Fallback to posting in a suitable channel
+        const channel = findBestChannel(guild);
+        if (channel) {
+            await channel.send({ embeds: [embed] });
+            console.log(`Sent onboarding message to #${channel.name}`);
+        }
+
+    } catch (error) {
+        console.error('Error in enhanced guild create handler:', {
+            error: error.message,
+            guildId: guild.id,
+            guildName: guild.name
+        });
+    }
+});
+
   
   // Add clean shutdown handler
   process.on('uncaughtException', async (error) => {

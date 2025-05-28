@@ -88,6 +88,8 @@ async function updateDatabaseSchema() {
             ADD COLUMN tickets_category_id TEXT`).catch(() => {});
         await db.run(`ALTER TABLE server_settings 
             ADD COLUMN tickets_enabled BOOLEAN DEFAULT FALSE`).catch(() => {});
+        await db.run(`ALTER TABLE server_settings 
+            ADD COLUMN chirpbot_category_id TEXT`).catch(() => {});
         // Remove the problematic schema update logic that was causing issues
         console.log('Schema update completed successfully');
         
@@ -106,7 +108,7 @@ async function initDatabase() {
        await db.run('PRAGMA journal_mode = WAL');
        await db.run('PRAGMA foreign_keys = ON');
 
-       // Server Settings (removed welcome-related columns)
+       // Server Settings
        await db.run(`
             CREATE TABLE IF NOT EXISTS server_settings (
                 guild_id TEXT PRIMARY KEY,
@@ -401,7 +403,7 @@ async function initDatabase() {
             )
         `);
 
-       // Create indices (removed welcome-related indices)
+       // Create indices
        await db.run(`CREATE INDEX IF NOT EXISTS idx_command_packs_name ON command_packs(name)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_server_command_packs ON server_command_packs(guild_id, pack_id)`);
        await db.run(`CREATE INDEX IF NOT EXISTS idx_guild_cmd ON command_permissions(guild_id, command_name)`);
@@ -1351,86 +1353,115 @@ const database = {
   },
 
   // Server Management
-  resetServer: async (guildId) => {
-       try {
-           if (!validateGuildId(guildId)) {
-               console.error('Invalid guild ID format:', guildId);
-               return false;
-           }
-           
-           serverSettingsCache.delete(guildId);
-           
-           const tables = [
-               'server_settings',
-               'warnings',
-               'logs',
-               'role_messages',
-               'spam_warnings',
-               'reports',
-               'server_command_packs'
-           ];
+    resetServer: async (guildId) => {
+        try {
+            if (!validateGuildId(guildId)) {
+                console.error('Invalid guild ID format:', guildId);
+                return false;
+            }
+            
+            serverSettingsCache.delete(guildId);
+            clearFilterCache(guildId);
+            
+            const tables = [
+                'server_settings',
+                'warnings',
+                'logs',
+                'role_messages',
+                'spam_warnings',
+                'reports',
+                'server_command_packs',
+                'tickets',
+                'blocked_ticket_users',
+                'channel_permissions',
+                'time_based_roles',
+                'filtered_terms',
+                'audit_logs'
+            ];
 
-           const transactionId = await database.beginTransaction();
+            const transactionId = await database.beginTransaction();
 
-           try {
-               for (const table of tables) {
-                   await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, [guildId]);
-               }
+            try {
+                for (const table of tables) {
+                    await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, [guildId]);
+                }
 
-               await database.commitTransaction(transactionId);
-               return true;
-           } catch (error) {
-               await database.rollbackTransaction(transactionId);
-               throw error;
-           }
-       } catch (error) {
-           console.error('Error resetting server:', {
-               error: error.message,
-               guildId: guildId
-           });
-           return false;
-       }
-   },
+                // Handle ticket_messages separately since it doesn't have guild_id directly
+                await db.run(`
+                    DELETE FROM ticket_messages 
+                    WHERE ticket_id IN (
+                        SELECT id FROM tickets WHERE guild_id = ?
+                    )
+                `, [guildId]);
 
-  resetServerForSetup: async (guildId) => {
-       try {
-           if (!validateGuildId(guildId)) {
-               console.error('Invalid guild ID format:', guildId);
-               return false;
-           }
-           
-           serverSettingsCache.delete(guildId);
-           
-           const tables = [
-               'server_settings',
-               'warnings',
-               'logs',
-               'role_messages',
-               'spam_warnings',
-               'reports'
-           ];
+                await database.commitTransaction(transactionId);
+                return true;
+            } catch (error) {
+                await database.rollbackTransaction(transactionId);
+                throw error;
+            }
+        } catch (error) {
+            console.error('Error resetting server:', {
+                error: error.message,
+                guildId: guildId
+            });
+            return false;
+        }
+    },
 
-           const transactionId = await database.beginTransaction();
+    resetServerForSetup: async (guildId) => {
+        try {
+            if (!validateGuildId(guildId)) {
+                console.error('Invalid guild ID format:', guildId);
+                return false;
+            }
+            
+            serverSettingsCache.delete(guildId);
+            clearFilterCache(guildId);
+            
+            const tables = [
+                'server_settings',
+                'warnings',
+                'logs',
+                'role_messages',
+                'spam_warnings',
+                'reports',
+                'tickets',
+                'blocked_ticket_users',
+                'channel_permissions',
+                'time_based_roles',
+                'filtered_terms'
+            ];
 
-           try {
-               for (const table of tables) {
-                   await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, [guildId]);
-               }
+            const transactionId = await database.beginTransaction();
 
-               await database.commitTransaction(transactionId);
-               return true;
-           } catch (error) {
-               await database.rollbackTransaction(transactionId);
-               throw error;
-           }
-       } catch (error) {
-           console.error('Error resetting server for setup:', {
-               error: error.message,
-               guildId: guildId
-           });
-           return false;
-       }
-   },
+            try {
+                for (const table of tables) {
+                    await db.run(`DELETE FROM ${table} WHERE guild_id = ?`, [guildId]);
+                }
+
+                // Handle ticket_messages separately since it doesn't have guild_id directly
+                await db.run(`
+                    DELETE FROM ticket_messages 
+                    WHERE ticket_id IN (
+                        SELECT id FROM tickets WHERE guild_id = ?
+                    )
+                `, [guildId]);
+
+                await database.commitTransaction(transactionId);
+                return true;
+            } catch (error) {
+                await database.rollbackTransaction(transactionId);
+                throw error;
+            }
+        } catch (error) {
+            console.error('Error resetting server for setup:', {
+                error: error.message,
+                guildId: guildId
+            });
+            return false;
+        }
+    },
 
   // Utility Functions
   clearExpiredWarnings: async () => {
@@ -1469,6 +1500,28 @@ const database = {
            return {};
        }
    },
+
+   getAllGuildWarnings: async (guildId) => {
+        try {
+            if (!validateGuildId(guildId)) {
+                console.error('Invalid guild ID format:', guildId);
+                return [];
+            }
+            
+            return await db.all(
+                `SELECT * FROM warnings 
+                WHERE guild_id = ? 
+                ORDER BY created_at DESC`,
+                [guildId]
+            );
+        } catch (error) {
+            console.error('Error getting all guild warnings:', {
+                error: error.message,
+                guildId: guildId
+            });
+            return [];
+        }
+    },
 
    // Reminder System
    createReminder: async (userId, guildId, channelId, message, reminderTime) => {
@@ -2454,6 +2507,50 @@ const database = {
        }
    },
 
+   updateTicket: async (ticketId, updates) => {
+        try {
+            if (!validateInteger(ticketId, 1)) {
+                console.error('Invalid ticketId parameter for updateTicket');
+                return { error: 'Invalid parameters' };
+            }
+            
+            const updateFields = [];
+            const updateValues = [];
+            
+            if (updates.thread_id !== undefined) {
+                updateFields.push('thread_id = ?');
+                updateValues.push(updates.thread_id);
+            }
+            
+            if (updates.channel_id !== undefined) {
+                updateFields.push('channel_id = ?');
+                updateValues.push(updates.channel_id);
+            }
+            
+            if (updates.status !== undefined) {
+                updateFields.push('status = ?');
+                updateValues.push(updates.status);
+            }
+            
+            if (updateFields.length === 0) {
+                return { error: 'No valid fields to update' };
+            }
+            
+            updateValues.push(ticketId);
+            
+            return await db.run(
+                `UPDATE tickets SET ${updateFields.join(', ')} WHERE id = ?`,
+                updateValues
+            );
+        } catch (error) {
+            console.error('Error updating ticket:', {
+                error: error.message,
+                ticketId: ticketId
+            });
+            return { error: 'Database error', details: error.message };
+        }
+    },
+
    getActiveUserTickets: async (userId) => {
        try {
            if (!validateUserId(userId)) {
@@ -2661,27 +2758,28 @@ const database = {
    },
 
    getRecentTickets: async (guildId, userId) => {
-       try {
-           if (!validateGuildId(guildId) || !validateUserId(userId)) {
-               console.error('Invalid parameters for getRecentTickets');
-               return [];
-           }
-           
-           return await db.all(`
-               SELECT * FROM tickets
-               WHERE guild_id = ? AND user_id = ?
-               AND created_at > datetime('now', '-1 day')`,
-               [guildId, userId]
-           );
-       } catch (error) {
-           console.error('Error getting recent tickets:', {
-               error: error.message,
-               guildId: guildId,
-               userId: userId
-           });
-           return [];
-       }
-   },
+        try {
+            if (!validateGuildId(guildId) || !validateUserId(userId)) {
+                console.error('Invalid parameters for getRecentTickets');
+                return [];
+            }
+            
+            // Check for tickets created in the last 24 hours
+            return await db.all(`
+                SELECT * FROM tickets
+                WHERE guild_id = ? AND user_id = ?
+                AND created_at > datetime('now', '-24 hours')
+                AND status = 'OPEN'
+            `, [guildId, userId]);
+        } catch (error) {
+            console.error('Error getting recent tickets:', {
+                error: error.message,
+                guildId: guildId,
+                userId: userId
+            });
+            return [];
+        }
+    },
 
    getAllUserTickets: async (guildId, userId) => {
        try {
