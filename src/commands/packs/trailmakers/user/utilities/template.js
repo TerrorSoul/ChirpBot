@@ -7,29 +7,15 @@ export const command = {
     permissionLevel: 'user',
     execute: async (interaction) => {
         const template = `
-local initialized = false
-
-function init()
-    -- Log initialization
-    tm.os.Log("Mod initialized!")
+-- Log mod started
+tm.os.Log("Mod started!")
    
-    -- Set up any required configurations
-    initialized = true
-   
-    -- Set update frequency (60 times per second)
-    tm.os.SetModTargetDeltaTime(1/60)
-end
+-- Set update frequency (60 times per second)
+tm.os.SetModTargetDeltaTime(1/60)
 
 function update()
-    -- Safety check to ensure initialization
-    if not initialized then return end
-   
-    -- Add your update logic here
-    -- Example: tm.os.Log("Update cycle: " .. tm.os.GetTime())
-end
-
--- Register the init function to start the mod
-init()`;
+    -- Something that happens every frame
+end`;
 
         const embed = new EmbedBuilder()
             .setColor('#00FF00')
@@ -38,9 +24,7 @@ init()`;
             .addFields({
                 name: 'Template Details',
                 value: [
-                    '• Includes basic initialization',
                     '• 60 FPS update cycle',
-                    '• Safety checks',
                     '• Basic structure for modding'
                 ].join('\n')
             })

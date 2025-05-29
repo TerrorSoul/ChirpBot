@@ -28,12 +28,21 @@ export const command = {
             // Generate roast
             const roast = await generateImageRoast(attachment.url);
 
+            // Check if the AI couldn't roast the image (not a Trailmakers build)
+            if (roast.toLowerCase().includes('cannot roast') || 
+                roast.toLowerCase().includes('can\'t roast') ||
+                roast.toLowerCase().includes('unable to roast') ||
+                roast.trim().toLowerCase() === 'i cannot roast this.' ||
+                roast.trim().toLowerCase() === 'i cannot roast this') {
+                return interaction.editReply('Please provide an image of a Trailmakers build for me to roast! 🔧');
+            }
+
             // Create the embed
             const roastEmbed = new EmbedBuilder()
                 .setTitle('🔥 Trailmakers Roast 🔥')
                 .setDescription(roast)
                 .setColor(0xFF4500)
-                .setImage(attachment.url) // Include the user's uploaded image
+                .setImage(attachment.url)
 
             // Send the embed as the reply
             await interaction.editReply({ 

@@ -25,24 +25,33 @@ export const command = {
                 return interaction.editReply('Please provide an image of your build! 🖼️');
             }
 
-            // Generate roast
-            const roast = await generateRating(attachment.url);
+            // Generate rating
+            const rating = await generateRating(attachment.url);
+
+            // Check if the AI couldn't rate the image (not a Trailmakers build)
+            if (rating.toLowerCase().includes('cannot rate') || 
+                rating.toLowerCase().includes('can\'t rate') ||
+                rating.toLowerCase().includes('unable to rate') ||
+                rating.trim().toLowerCase() === 'i cannot rate this.' ||
+                rating.trim().toLowerCase() === 'i cannot rate this') {
+                return interaction.editReply('Please provide an image of a Trailmakers build for me to rate! 🔧');
+            }
 
             // Create the embed
-            const roastEmbed = new EmbedBuilder()
-                .setTitle('🔥 Trailmakers Build Rating 🔥')
-                .setDescription(roast)
-                .setColor(0xFF4500)
-                .setImage(attachment.url) // Include the user's uploaded image
+            const ratingEmbed = new EmbedBuilder()
+                .setTitle('⭐ Trailmakers Build Rating ⭐')
+                .setDescription(rating)
+                .setColor(0x1b2838)
+                .setImage(attachment.url)
 
             // Send the embed as the reply
             await interaction.editReply({ 
-                embeds: [roastEmbed],
+                embeds: [ratingEmbed],
                 allowedMentions: { parse: [] }
             });
 
         } catch (error) {
-            console.error('Error generating roast:', error);
+            console.error('Error generating rating:', error);
             await interaction.editReply('ChirpBot is having a coffee break. Try again later! ☕');
         }
     }

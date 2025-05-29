@@ -736,9 +736,61 @@ function extractGeneralInfo(content, result) {
 function cleanText(text) {
     if (!text) return '';
     
-    // First, handle wiki markup and preserve line structure
+    // First, let's handle code blocks by identifying them before HTML cleaning
+    const codeBlocks = [];
+    let codeBlockIndex = 0;
+    
+    // Handle different types of code blocks
+    text = text.replace(/<pre[^>]*>(.*?)<\/pre>/gis, (match, content) => {
+        const placeholder = `__CODEBLOCK_${codeBlockIndex}__`;
+        // Clean the code content but preserve structure
+        const cleanCode = content
+            .replace(/<[^>]+>/g, '') // Remove HTML tags
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+        codeBlocks[codeBlockIndex] = cleanCode;
+        codeBlockIndex++;
+        return placeholder;
+    });
+    
+    text = text.replace(/<code[^>]*>(.*?)<\/code>/gis, (match, content) => {
+        const placeholder = `__CODEBLOCK_${codeBlockIndex}__`;
+        const cleanCode = content
+            .replace(/<[^>]+>/g, '')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+        codeBlocks[codeBlockIndex] = cleanCode;
+        codeBlockIndex++;
+        return placeholder;
+    });
+    
+    // Handle syntax highlighted code (common in wikis)
+    text = text.replace(/<div[^>]*class="[^"]*highlight[^"]*"[^>]*>(.*?)<\/div>/gis, (match, content) => {
+        const placeholder = `__CODEBLOCK_${codeBlockIndex}__`;
+        const cleanCode = content
+            .replace(/<[^>]+>/g, '')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+        codeBlocks[codeBlockIndex] = cleanCode;
+        codeBlockIndex++;
+        return placeholder;
+    });
+    
+    // Now clean the rest of the text normally
     let cleaned = text
-        .replace(/<[^>]+>/g, '') // Remove HTML tags
+        .replace(/<[^>]+>/g, '') // Remove ALL HTML tags
         .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2') // [[link|text]] -> text
         .replace(/\[\[([^\]]+)\]\]/g, '$1') // [[link]] -> link
         .replace(/'''([^']+)'''/g, '**$1**') // '''bold''' -> **bold**
@@ -746,7 +798,7 @@ function cleanText(text) {
         .replace(/\{\{[^}]+\}\}/g, '') // Remove templates
         .replace(/\[\s*https?:\/\/[^\s\]]+\s+([^\]]+)\]/g, '$1') // [url text] -> text
         .replace(/https?:\/\/[^\s\]]+/g, '') // Remove remaining URLs
-        .replace(/\d+px\|[^|]*\|[^|]*\|/g, '') // Remove image syntax like "300px|thumb|right|"
+        .replace(/\d+px\|[^|]*\|[^|]*\|/g, '') // Remove image syntax
         .replace(/\d+px\|[^|]*\|/g, '') // Remove shorter image syntax
         .replace(/\|\s*thumb\s*\|/g, '') // Remove |thumb|
         .replace(/\|\s*right\s*\|/g, '') // Remove |right|
@@ -780,7 +832,7 @@ function cleanText(text) {
         .replace(/^\s*\|\s*/gm, '') // Remove leading pipe characters
         .replace(/\s*\|\s*$/gm, ''); // Remove trailing pipe characters
 
-    // Now handle line formatting
+    // Handle line formatting while preserving code blocks
     const lines = cleaned.split('\n');
     const processedLines = [];
     
@@ -788,6 +840,12 @@ function cleanText(text) {
         line = line.trim();
         
         if (!line) continue; // Skip empty lines
+        
+        // Check if this line contains a code block placeholder
+        if (line.includes('__CODEBLOCK_')) {
+            processedLines.push(line);
+            continue;
+        }
         
         // Convert wiki list items to bullet points
         if (line.match(/^#\s+/)) {
@@ -801,6 +859,37 @@ function cleanText(text) {
     
     // Join lines back together with proper spacing
     let result = processedLines.join('\n');
+    
+    // Restore code blocks with simple formatting for embeds
+    for (let i = 0; i < codeBlocks.length; i++) {
+        const placeholder = `__CODEBLOCK_${i}__`;
+        const codeContent = codeBlocks[i];
+        
+        if (!codeContent) continue;
+        
+        // For embeds, we'll format code simply without fancy formatting
+        // Split into lines and format nicely
+        const codeLines = codeContent.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+        
+        if (codeLines.length === 0) {
+            result = result.replace(placeholder, '');
+            continue;
+        }
+        
+        // For short single-line code, use inline backticks
+        if (codeLines.length === 1 && codeLines[0].length < 60) {
+            result = result.replace(placeholder, `\`${codeLines[0]}\``);
+        } else {
+            // For multi-line code, create a simple formatted block
+            const formattedLines = codeLines.slice(0, 8) // Limit to 8 lines to avoid field length issues
+                .map(line => `\`${line.substring(0, 80)}\``) // Limit line length too
+                .join('\n');
+            
+            result = result.replace(placeholder, '\n' + formattedLines + '\n');
+        }
+    }
     
     // Add spacing around important elements
     result = result
