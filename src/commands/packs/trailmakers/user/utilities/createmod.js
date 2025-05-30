@@ -49,7 +49,7 @@ export const command = {
             
             // Create .lua file attachment
             const luaFile = new AttachmentBuilder(Buffer.from(cleanCode, 'utf-8'), {
-                name: 'generated_mod.lua'
+                name: 'main.lua'
             });
             
             // Create the message content

@@ -1,14 +1,44 @@
 // src/services/mistralService.js
 import MistralClient from '@mistralai/mistralai';
 
-let mistralClient = null;
+let mistralClients = [];
+let currentClientIndex = 0;
 
 export function initMistral() {
-    mistralClient = new MistralClient(process.env.MISTRAL_API_KEY);
+    // Collect all numbered API keys from environment
+    const apiKeys = [];
+    let keyIndex = 1;
+    
+    // Check for numbered keys (MISTRAL_API_KEY_1, MISTRAL_API_KEY_2, etc.)
+    while (process.env[`MISTRAL_API_KEY_${keyIndex}`]) {
+        apiKeys.push(process.env[`MISTRAL_API_KEY_${keyIndex}`]);
+        keyIndex++;
+    }
+    
+    if (apiKeys.length === 0) {
+        throw new Error('No Mistral API keys found. Please set MISTRAL_API_KEY_1, MISTRAL_API_KEY_2, etc. in your environment variables');
+    }
+    
+    // Create clients for each API key
+    mistralClients = apiKeys.map(key => new MistralClient(key));
+    
+    console.log(`Initialized ${mistralClients.length} Mistral API clients`);
+}
+
+// Get the next client in rotation
+function getNextClient() {
+    if (mistralClients.length === 0) {
+        throw new Error('No Mistral clients initialized');
+    }
+    
+    const client = mistralClients[currentClientIndex];
+    currentClientIndex = (currentClientIndex + 1) % mistralClients.length;
+    return client;
 }
 
 export async function generateJoke() {
-    const chatResult = await mistralClient.chat({
+    const client = getNextClient();
+    const chatResult = await client.chat({
         model: "open-mistral-nemo",
         messages: [
             {
@@ -27,7 +57,8 @@ export async function generateJoke() {
 }
 
 export async function generateModCode(prompt, includeExplanation = false) {
-    const chatResult = await mistralClient.chat({
+    const client = getNextClient();
+    const chatResult = await client.chat({
         model: "devstral-small-2505",
         messages: [
             {
@@ -151,7 +182,19 @@ API FUNCTIONS WITH TYPES:
 - gameObject.AddForce(x: number, y: number, z: number) → nil
 - gameObject.SetTexture(textureName: string) → nil
 
-12. STRUCTURE METHODS (on ModStructure):
+12. TRANSFORM METHODS (on ModTransform - CRITICAL FOR SCALING):
+- transform.SetPosition(position: ModVector3) → nil
+- transform.SetPosition(x: number, y: number, z: number) → nil
+- transform.GetPosition() → ModVector3
+- transform.SetRotation(rotation: ModVector3) → nil
+- transform.SetRotation(x: number, y: number, z: number) → nil
+- transform.GetRotation() → ModVector3
+- transform.SetScale(scale: ModVector3) → nil
+- transform.SetScale(x: number, y: number, z: number) → nil
+- transform.SetScale(scale: number) → nil (uniform scaling)
+- transform.GetScale() → ModVector3
+
+13. STRUCTURE METHODS (on ModStructure):
 - structure.GetBlocks() → ModBlock[] (table of blocks)
 - structure.AddForce(x: number, y: number, z: number) → nil
 - structure.GetVelocity() → ModVector3
@@ -160,7 +203,7 @@ API FUNCTIONS WITH TYPES:
 - structure.GetPowerCores() → number
 - structure.Destroy() → nil
 
-13. BLOCK METHODS (on ModBlock):
+14. BLOCK METHODS (on ModBlock):
 - block.SetPrimaryColor(r: number, g: number, b: number) → nil (build mode only, 0-1 range)
 - block.SetSecondaryColor(r: number, g: number, b: number) → nil (build mode only, 0-1 range)
 - block.SetMass(mass: number) → nil (build mode only)
@@ -182,11 +225,27 @@ API FUNCTIONS WITH TYPES:
 - block.Exists() → boolean
 
 STRUCTURE EXAMPLES:
-Simple one-time action:
--- Spawn a sheep at coordinates (0, 300, 0)
+
+Spawning and scaling objects:
+-- Spawn a sheep and make it twice as big
 local position = tm.vector3.Create(0, 300, 0)
 local sheep = tm.physics.SpawnObject(position, "PFB_Sheep")
-tm.os.Log("Sheep spawned at position: " .. position.x .. ", " .. position.y .. ", " .. position.z)
+if sheep.Exists() then
+    local sheepTransform = sheep.GetTransform()
+    sheepTransform.SetScale(2.0) -- Make it twice as big
+    tm.os.Log("Spawned and scaled sheep")
+end
+
+-- Spawn multiple objects with different scales
+local objects = {"PFB_Barrel", "PFB_Sheep", "PFB_Cow"}
+for i = 1, #objects do
+    local pos = tm.vector3.Create(i * 5, 10, 0)
+    local obj = tm.physics.SpawnObject(pos, objects[i])
+    if obj.Exists() then
+        local transform = obj.GetTransform()
+        transform.SetScale(0.5 + i * 0.5) -- Different scales: 1.0, 1.5, 2.0
+    end
+end
 
 Frame-based mod:
 -- Gravity controller that changes over time
@@ -202,11 +261,12 @@ end
 CRITICAL RULES:
 1. ALL variables must be declared with 'local'
 2. ALWAYS check if objects exist before using them with .Exists()
-3. Player IDs range 0-7, where 0 is always the host
-4. Colors use 0-1 range (not 0-255)
-5. Only use tm.os.SetModTargetDeltaTime() if you have an update() function
-6. Tables in Lua are 1-indexed, not 0-indexed
-7. Use proper type checking when working with returned tables/objects
+3. To scale objects: spawn → get transform → set scale
+4. Player IDs range 0-7, where 0 is always the host
+5. Colors use 0-1 range (not 0-255)
+6. Only use tm.os.SetModTargetDeltaTime() if you have an update() function
+7. Tables in Lua are 1-indexed, not 0-indexed
+8. Use proper type checking when working with returned tables/objects
 
 FORMAT: Generate clean Lua code with proper types and error checking.` + (includeExplanation ? "" : "\nProvide code only, no explanation.")
             },
@@ -222,8 +282,9 @@ FORMAT: Generate clean Lua code with proper types and error checking.` + (includ
 }
 
 export async function scanImageForNSFW(imageUrl) {
+    const client = getNextClient();
     try {
-        const chatResult = await mistralClient.chat({
+        const chatResult = await client.chat({
             model: "pixtral-12b-2409",
             messages: [
                 {
@@ -260,8 +321,9 @@ export async function scanImageForNSFW(imageUrl) {
 }
 
 export async function checkImageAgainstRules(imageUrl, serverRules) {
+    const client = getNextClient();
     try {
-        const chatResult = await mistralClient.chat({
+        const chatResult = await client.chat({
             model: "pixtral-12b-2409",
             messages: [
                 {
@@ -302,7 +364,8 @@ Respond with either:
 }
 
 export async function analyzeMessage(content) {
-    const chatResult = await mistralClient.chat({
+    const client = getNextClient();
+    const chatResult = await client.chat({
         model: "open-mistral-nemo", 
         messages: [
             {
@@ -338,8 +401,9 @@ export async function analyzeMessage(content) {
 }
 
 export async function translateToEnglish(text) {
+    const client = getNextClient();
     try {
-        const chatResult = await mistralClient.chat({
+        const chatResult = await client.chat({
             model: "open-mistral-nemo", 
             messages: [
                 {
@@ -387,7 +451,8 @@ Examples:
 }
 
 export async function explainCode(code) {
-    const result = await mistralClient.chat({
+    const client = getNextClient();
+    const result = await client.chat({
         model: "devstral-small-2505",
         messages: [
             {
@@ -495,7 +560,8 @@ Provide comprehensive explanations that teach both the specific code logic and g
 }
 
 export async function generateImageRoast(imageUrl) {
-    const chatResult = await mistralClient.chat({
+    const client = getNextClient();
+    const chatResult = await client.chat({
         model: "pixtral-12b-2409",
         messages: [
             {
@@ -503,7 +569,18 @@ export async function generateImageRoast(imageUrl) {
                 content: [
                     {
                         type: "text",
-                        text: "Carefully analyze this image. If it does not clearly show at least one Trailmakers block, part, or vehicle component, respond with exactly: 'I cannot roast this.' Otherwise, create a sharp and edgy roast for this Trailmakers vehicle. Don't hold back, but keep it suitable for a Discord community server. Focus on what you see in the build and make it witty, snarky, and funny, it can also be sarcastic. Include one emoji. Keep it short (1-2 sentences). Respond without quotation marks surrounding the full response."
+                        text: `STRICT VALIDATION REQUIRED:
+
+1. First, carefully examine this image to identify if it contains ANY recognizable Trailmakers game elements.
+2. Look specifically for: wheels, engines, thrusters, jets, servos, wings, propellers, seats, gyros, cannons, or other distinctive Trailmakers blocks/parts.
+3. The image must show an actual vehicle or build FROM the Trailmakers game.
+
+RESPONSE RULES:
+- If you cannot clearly identify at least one recognizable Trailmakers block/part/component, respond with EXACTLY: "I cannot roast this."
+- If it's clearly not from Trailmakers (photos, other games, random objects, animals, people, etc.), respond with EXACTLY: "I cannot roast this."
+- ONLY if you can clearly see recognizable Trailmakers game elements should you provide a roast.
+
+If it IS a valid Trailmakers build, create a sharp, witty roast (1-2 sentences, include one emoji). Keep it suitable for Discord but don't hold back on the snark.`
                     },
                     {
                         type: "image_url",
@@ -512,14 +589,15 @@ export async function generateImageRoast(imageUrl) {
                 ]
             }
         ],
-        temperature: 0.4
+        temperature: 0.1 // Very low temperature for consistent validation
     });
 
-    return chatResult.choices[0].message.content;
+    return chatResult.choices[0].message.content.trim();
 }
 
 export async function generateRating(imageUrl) {
-    const chatResult = await mistralClient.chat({
+    const client = getNextClient();
+    const chatResult = await client.chat({
         model: "pixtral-12b-2409",
         messages: [
             {
